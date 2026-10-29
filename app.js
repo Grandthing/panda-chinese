@@ -127,7 +127,7 @@ addEventListener('pagehide', () => { saveNow(); Log.flush(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) { saveNow(); Log.flush(); } });
 
 // ============================================================ Debug log (ring buffer, kept across sessions → LINE / file)
-const APP_VERSION = '1.4.0';
+const APP_VERSION = '1.4.1';
 const LOG_KEY = 'pandaTalk.log';
 const LOG_MAX = 400;
 const safeJson = v => { try { return JSON.stringify(v); } catch { return String(v); } };
@@ -300,7 +300,7 @@ const TTS = {
     this.voices = speechSynthesis.getVoices().filter(v => /^(zh[-_](cn|hans)|cmn)/i.test(v.lang))
       .sort((a, b) => this.quality(b) - this.quality(a) || b.localService - a.localService);
     this.pick();
-    if (this.voices.length !== n) logI('tts', `เสียงจีน ${this.voices.length}: ${this.voices.map(v => v.name + (v.localService ? '' : '(net)')).join(', ')} → ใช้ ${this.voice ? this.voice.name : '-'}`);
+    if (this.voices.length !== n) logI('tts', `เสียงทั้งหมด ${speechSynthesis.getVoices().length} · เสียงจีน ${this.voices.length}:${this.voices.map(v => v.name + (v.localService ? '' : '(net)')).join(', ')} → ใช้ ${this.voice ? this.voice.name : '-'}`);
   },
   // 2 = premium, 1 = enhanced, 0 = standard (iOS puts the tier in the name and in voiceURI)
   quality(v) {
@@ -308,6 +308,9 @@ const TTS = {
     return /premium|พรีเมียม|高级|優質/i.test(s) ? 2 : /enhanced|ปรับปรุง|增强|強化/i.test(s) ? 1 : 0;
   },
   pick() {
+    // 'system': set no voice, only lang — iOS then speaks with the Mandarin voice chosen in
+    // Settings → Spoken Content, which can be a downloaded Enhanced/Premium voice Safari doesn't list.
+    if (S.settings.voiceURI === 'system') { this.voice = null; return; }
     const pref = S.settings.voiceURI && this.voices.find(v => v.voiceURI === S.settings.voiceURI);
     this.voice = pref || this.voices.find(v => v.localService) || this.voices[0] || null;
   },
@@ -1259,18 +1262,19 @@ function renderSettings() {
     h('input', { type: 'checkbox', class: 'switch', checked: s[k], onchange: e => { set(k, e.target.checked); if (k === 'unlimitedHearts') renderSettings(); } }));
   const QLABEL = ['มาตรฐาน', '⭐ ปรับปรุง', '💎 พรีเมียม'];
   const voiceNow = h('p', { class: 'muted' });
-  const showNow = () => voiceNow.textContent = TTS.voices.length ? `พบเสียงจีน ${TTS.voices.length} เสียง · ใช้: ${TTS.voice ? TTS.voice.name : '-'}` : '⚠️ ไม่พบเสียงจีนในเครื่อง — โหลดเพิ่มได้ตามวิธีด้านล่าง';
+  const showNow = () => voiceNow.textContent = s.voiceURI === 'system' ? 'ใช้: เสียงจีนที่เลือกไว้ใน iPhone'
+    : TTS.voices.length ? `แอปเห็นเสียงจีน ${TTS.voices.length} เสียง · ใช้: ${TTS.voice ? TTS.voice.name : '-'}` : '⚠️ แอปไม่เห็นเสียงจีน — ลองเลือก "เสียงที่เลือกไว้ใน iPhone"';
   showNow();
-  const voiceList = h('div', { class: 'voice-list' }, ...[null, ...TTS.voices].map(v => {
-    const on = v ? s.voiceURI === v.voiceURI : !s.voiceURI;
-    const b = h('button', { class: 'voice' + (on ? ' on' : ''), onclick: () => {
-      set('voiceURI', v ? v.voiceURI : null); TTS.pick(); showNow();
+  const rows = [{ uri: null, name: 'อัตโนมัติ', sub: 'เลือกจากเสียงที่แอปเห็น' },
+    { uri: 'system', name: '📱 เสียงที่เลือกไว้ใน iPhone', sub: 'ใช้เสียงที่โหลดเพิ่ม แม้ไม่ขึ้นในรายการนี้' },
+    ...TTS.voices.map(v => ({ uri: v.voiceURI, name: v.name.replace(/\s*[(（].*[)）]\s*$/, ''), sub: QLABEL[TTS.quality(v)] + (v.localService ? '' : ' · ออนไลน์') }))];
+  const voiceList = h('div', { class: 'voice-list' }, ...rows.map(r => {
+    const b = h('button', { class: 'voice' + ((s.voiceURI || null) === r.uri ? ' on' : ''), onclick: () => {
+      set('voiceURI', r.uri); TTS.pick(); showNow();
+      logI('tts', 'เลือกเสียง ' + (r.uri || 'auto'));
       voiceList.querySelectorAll('.voice').forEach(x => x.classList.toggle('on', x === b));
       TTS.speak('你好，欢迎来中国');
-    } },
-      h('span', { class: 'v-name' }, v ? v.name.replace(/\s*[(（].*[)）]\s*$/, '') : 'อัตโนมัติ'),
-      h('small', {}, v ? QLABEL[TTS.quality(v)] + (v.localService ? '' : ' · ออนไลน์') : 'เลือกเสียงที่ดีที่สุดให้'),
-      h('span', { class: 'v-ic' }, '🔊'));
+    } }, h('span', { class: 'v-name' }, r.name), h('small', {}, r.sub), h('span', { class: 'v-ic' }, '🔊'));
     return b;
   }));
   const noBetter = TTS.voices.length && !TTS.voices.some(v => TTS.quality(v) > 0);
@@ -1300,9 +1304,10 @@ function renderSettings() {
         h('ol', {},
           h('li', {}, 'เปิดแอป "ตั้งค่า" ของ iPhone → ', h('b', {}, 'การช่วยการเข้าถึง → เนื้อหาที่พูด → เสียง')),
           h('li', {}, 'เลือก ', h('b', {}, 'จีน (จีนแผ่นดินใหญ่)'), ' — ไม่ใช่ไต้หวันหรือฮ่องกง'),
-          h('li', {}, 'แตะชื่อเสียง เช่น Tingting, Lili, Yu-shu, Li-mu แล้วแตะ ☁️ โหลดแบบ ', h('b', {}, '"ปรับปรุง"'), ' หรือ ', h('b', {}, '"พรีเมียม"'), ' (ถ้ามี) — ไฟล์ใหญ่ ควรใช้ Wi-Fi'),
-          h('li', {}, 'ปัดปิดแอปแพนด้าแล้วเปิดใหม่ → กลับมาหน้านี้ แตะเสียงที่มี ⭐ หรือ 💎')),
-        h('p', { class: 'muted small' }, 'เสียงที่โหลดแล้วใช้ได้แม้ไม่มีเน็ต · เสียง Siri ใช้ในเว็บแอปไม่ได้ (Apple ไม่เปิดให้) · ถ้าโหลดแล้วไม่ขึ้นในรายการ แปลว่า iOS ยังไม่ให้เว็บใช้เสียงนั้น'),
+          h('li', {}, 'แตะ ☁️ โหลดเสียงแบบ ', h('b', {}, '(Enhanced)'), ' หรือ ', h('b', {}, '(Premium)'), ' เช่น Han, Binbin, Lili — ไฟล์ใหญ่ ควรใช้ Wi-Fi'),
+          h('li', {}, h('b', {}, 'แตะที่ชื่อเสียงนั้นอีกครั้งให้มีเครื่องหมาย ✓'), ' (ตั้งเป็นเสียงจีนหลักของเครื่อง) — โหลดอย่างเดียวยังไม่พอ'),
+          h('li', {}, 'ปัดปิดแอปแพนด้าแล้วเปิดใหม่ → กลับมาหน้านี้ แตะ ', h('b', {}, '"📱 เสียงที่เลือกไว้ใน iPhone"'), ' แล้วฟังว่าเสียงเปลี่ยนไหม')),
+        h('p', { class: 'muted small' }, 'Safari มักไม่ส่งรายชื่อเสียงที่โหลดเพิ่มมาให้เว็บ (เพื่อความเป็นส่วนตัว) รายการด้านบนจึงอาจเห็นแค่เสียงเดียว · เสียงที่โหลดแล้วใช้ได้แม้ไม่มีเน็ต · เสียง Siri ใช้ในเว็บแอปไม่ได้'),
         h('button', { class: 'btn btn-ghost', onclick: () => { TTS.load(); renderSettings(); toast(`พบเสียงจีน ${TTS.voices.length} เสียง`); } }, '🔄 ค้นหาเสียงใหม่'))),
     h('section', { class: 'card-box' }, h('h3', {}, 'ไมค์ & ข้อพูด'),
       h('label', { class: 'row' }, h('span', {}, 'โหมด'), micSel),
