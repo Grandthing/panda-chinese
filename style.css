@@ -69,6 +69,13 @@ body {
 }
 button, input, select { font: inherit; color: inherit; }
 button { cursor: pointer; }
+/* iOS: a long press on a button must not select its text or pop up the Copy/Paste callout,
+   and taps must not wait for double-tap-zoom detection. Text fields stay selectable. */
+html { -webkit-touch-callout: none; }
+body { -webkit-user-select: none; user-select: none; }
+button, a, label { touch-action: manipulation; }
+input, textarea, select { -webkit-user-select: text; user-select: text; -webkit-touch-callout: default; }
+.cert { -webkit-touch-callout: default; }
 [hidden] { display: none !important; }
 [lang="zh-CN"] { font-family: var(--font-zh); }
 

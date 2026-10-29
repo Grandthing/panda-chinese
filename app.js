@@ -127,7 +127,7 @@ addEventListener('pagehide', () => { saveNow(); Log.flush(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) { saveNow(); Log.flush(); } });
 
 // ============================================================ Debug log (ring buffer, kept across sessions → LINE / file)
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.2.0';
 const LOG_KEY = 'pandaTalk.log';
 const LOG_MAX = 400;
 const safeJson = v => { try { return JSON.stringify(v); } catch { return String(v); } };
@@ -358,33 +358,40 @@ const Speech = {
     return this.canRecord() ? 'B' : 'C';
   },
   toneAvailable() { return S.settings.micMode !== 'off' && !this.snoozed() && this.canRecord(); },
-  recognize(timeoutMs = 7000) {
+  active: null,
+  // Safari only marks a result final after a long pause, so we listen to interim results and
+  // finish as soon as `isGood(alts)` is satisfied. Speech.stop() ends listening early (second tap).
+  recognize({ timeoutMs = 6000, isGood, onStart } = {}) {
     return new Promise((resolve, reject) => {
       let r, tm = 0, done = false;
       const alts = [];
       const finish = (ok, arg) => {
         if (done) return;
-        done = true; clearTimeout(tm);
+        done = true; clearTimeout(tm); this.active = null;
         try { r.abort(); } catch {}
         ok ? resolve(arg) : reject(arg);
       };
+      const settle = () => alts.length ? finish(true, alts) : finish(false, 'no-speech');
       try {
         r = new SR();
-        r.lang = 'zh-CN'; r.interimResults = false; r.maxAlternatives = 5; r.continuous = false;
+        r.lang = 'zh-CN'; r.interimResults = true; r.maxAlternatives = 5; r.continuous = false;
+        r.onstart = () => onStart && onStart();
         r.onresult = e => {
-          for (const res of e.results) for (let i = 0; i < res.length; i++) alts.push(res[i].transcript);
-          if (e.results[e.results.length - 1].isFinal) finish(true, alts);
+          for (const res of e.results) for (let i = 0; i < res.length; i++) {
+            const t = res[i].transcript;
+            if (t && !alts.includes(t)) alts.push(t);
+          }
+          if (e.results[e.results.length - 1].isFinal || (isGood && isGood(alts))) finish(true, alts);
         };
         r.onerror = e => finish(false, e.error || 'error');
-        r.onend = () => alts.length ? finish(true, alts) : finish(false, 'no-speech');
-        tm = setTimeout(() => {
-          try { r.stop(); } catch {}
-          setTimeout(() => alts.length ? finish(true, alts) : finish(false, 'no-speech'), 900);
-        }, timeoutMs);
+        r.onend = settle;
+        this.active = { stop: () => { try { r.stop(); } catch {} setTimeout(settle, 700); } };
+        tm = setTimeout(() => this.active && this.active.stop(), timeoutMs);
         r.start();
       } catch { finish(false, 'start-failed'); }
     });
   },
+  stop() { if (this.active) this.active.stop(); },
 };
 
 const normZh = s => (s || '').replace(/[\s，。！？、,.!?…'"“”‘’：:；;]/g, '').toLowerCase();
@@ -416,7 +423,8 @@ function lookupHanzi(hz) {
 }
 
 // ============================================================ Recorder (getUserMedia → Float32 samples)
-function startRecording(maxMs, onLevel) {
+// autoStop: end ~0.7 s after the speaker goes quiet (once some speech was heard) instead of waiting for maxMs.
+function startRecording(maxMs, onLevel, { autoStop = false } = {}) {
   const ctl = { stop: () => { ctl.stopRequested = true; } };
   ctl.promise = (async () => {
     const ctx = audioCtx();
@@ -448,10 +456,19 @@ function startRecording(maxMs, onLevel) {
         for (const c of chunks) { out.set(c, o); o += c.length; }
         resolve({ samples: out, sampleRate: ctx.sampleRate });
       };
+      const dt = 2048 / ctx.sampleRate;
+      let noise = Infinity, voiced = 0, quiet = 0;
       proc.onaudioprocess = e => {
         const d = e.inputBuffer.getChannelData(0);
         chunks.push(new Float32Array(d));
-        if (onLevel) { let s = 0; for (let i = 0; i < d.length; i += 4) s += d[i] * d[i]; onLevel(Math.sqrt(s / (d.length / 4))); }
+        let s = 0;
+        for (let i = 0; i < d.length; i += 4) s += d[i] * d[i];
+        const lvl = Math.sqrt(s / (d.length / 4));
+        if (onLevel) onLevel(lvl);
+        if (!autoStop) return;
+        noise = Math.min(noise, Math.max(lvl, 0.002));
+        if (lvl > Math.max(0.015, noise * 4)) { voiced += dt; quiet = 0; }
+        else if (voiced > 0.2 && (quiet += dt) > 0.7) setTimeout(stop, 0);
       };
       src.connect(proc); proc.connect(mute); mute.connect(ctx.destination);
       t = setTimeout(stop, maxMs);
@@ -593,7 +610,10 @@ function toneCheck(clip, tones) {
     const target = sp[i];
     if (target.tone === 5) return { target: 5, got: 5, ok: true, raw: st };
     const c = classifyTone(curve, !!S.pitchProfile, step);
-    return { target: target.tone, half: target.half, got: c.tone, ok: c.tone === target.tone, raw: st };
+    // Tone 3 is above all "low": a calibrated speaker staying well below their centre without a big rise counts.
+    const low3 = target.tone === 3 && S.pitchProfile && mean(curve) < -1.5 && curve[4] - curve[0] < 4;
+    const got = low3 ? 3 : c.tone;
+    return { target: target.tone, half: target.half, got, ok: got === target.tone, raw: st, curve };
   });
   return { ok: syl.every(r => r.ok), syl, step };
 }
@@ -1167,7 +1187,7 @@ function renderSettings() {
 async function testMic(out) {
   if (SR && !Speech.srBroken && S.settings.micMode === 'auto') {
     out.textContent = 'พูดว่า "你好 nǐ hǎo" ได้เลย…';
-    try { const alts = await Speech.recognize(5000); out.textContent = `✅ ระบบตรวจคำใช้ได้ ได้ยินว่า: ${alts[0]}`; return; }
+    try { const alts = await Speech.recognize({ timeoutMs: 5000 }); out.textContent = `✅ ระบบตรวจคำใช้ได้ ได้ยินว่า: ${alts[0]}`; return; }
     catch (e) { out.textContent = `ระบบตรวจคำใช้ไม่ได้ (${e}) — ลองอัดเสียงแทน…`; if (e !== 'no-speech') Speech.srBroken = true; }
   }
   if (!Mic.supported()) { out.textContent = '❌ เบราว์เซอร์นี้อัดเสียงไม่ได้ — ใช้โหมดพูดแล้วกดยืนยันเอง'; return; }
@@ -1276,7 +1296,8 @@ function sendToLine() {
 async function shareLogFile() {
   logI('report', 'แชร์ไฟล์ log');
   const text = logText();
-  const name = `panda-log-${today()}.txt`;
+  const d = new Date();
+  const name = `panda-log-${today()}-${z2(d.getHours())}${z2(d.getMinutes())}.txt`;
   try {
     const file = new File([text], name, { type: 'text/plain' });
     if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: name }); return; }
@@ -1302,8 +1323,9 @@ function reportSheet() {
   ta.addEventListener('input', () => { reportNote = ta.value; });
   const count = h('p', { class: 'muted small' }, `log ${Log.items.length} บรรทัด · ข้อผิดพลาด ${Log.errors()} ครั้ง · มีแค่รุ่นเครื่อง ผลการเรียน และคำที่ระบบได้ยิน ไม่มีข้อมูลส่วนตัว`);
   openSheet(h('div', { class: 'info-sheet' }, h('h3', {}, '🐞 รายงานปัญหา'), ta, count,
-    h('button', { class: 'btn btn-line', onclick: sendToLine }, '💬 ส่งไป LINE'),
-    h('button', { class: 'btn btn-ghost', onclick: shareLogFile }, '📎 แชร์ไฟล์ log ทั้งหมด (เลือก LINE ได้)'),
+    h('button', { class: 'btn btn-line', onclick: shareLogFile }, '📎 ส่งไฟล์ log (เลือก LINE)'),
+    h('p', { class: 'muted small center' }, 'เมนูแชร์จะเด้งขึ้น → เลือก LINE → เลือกแชท'),
+    h('button', { class: 'btn btn-ghost', onclick: sendToLine }, '💬 ส่งเป็นข้อความ LINE (แบบย่อ)'),
     h('button', { class: 'btn btn-ghost', onclick: copyLog }, '📋 คัดลอก log'),
     h('button', { class: 'btn btn-danger-ghost', onclick: () => { Log.clear(); count.textContent = 'ล้าง log แล้ว'; } }, '🗑️ ล้าง log (หลังส่งแล้ว)')));
 }
@@ -1400,8 +1422,8 @@ function endSession() {
   if (TTS.supported) speechSynthesis.cancel();
   const el = lessonEl();
   el.hidden = true; el.replaceChildren();
-  location.replace('#/learn');
-  render();
+  // Leaving #/lesson fires hashchange, which renders; only render directly if the hash won't change.
+  if (location.hash === '#/learn') render(); else location.replace('#/learn');
 }
 
 function updateHead() {
@@ -1669,16 +1691,22 @@ function exSpeak(ex) {
 
   const renderA = () => {
     const mic = micButton('แตะแล้วพูด', async () => {
-      if (mic.classList.contains('on')) return;
+      if (mic.classList.contains('on')) { status.textContent = 'กำลังตรวจ…'; Speech.stop(); return; }
       if (TTS.supported) speechSynthesis.cancel();
       mic.classList.add('on');
-      status.textContent = 'กำลังฟัง… พูดได้เลย';
+      mic.querySelector('.mic-l').textContent = 'แตะเมื่อพูดจบ';
+      status.textContent = 'กำลังเปิดไมค์…';
+      const t0 = Date.now();
       try {
-        const alts = await Speech.recognize();
+        const alts = await Speech.recognize({
+          isGood: a => scoreSpeech(it, a).best >= 0.8,
+          onStart: () => { status.textContent = 'พูดได้เลย 🎙️'; },
+        });
         mic.classList.remove('on');
+        mic.querySelector('.mic-l').textContent = 'แตะแล้วพูด';
         const r = scoreSpeech(it, alts);
         attempts++;
-        logI('sr', `${it.id} ได้ยิน [${alts.join(' / ')}] score=${r.best.toFixed(2)}${r.toneTrap ? ' trap=' + r.toneTrap : ''}`);
+        logI('sr', `${it.id} ได้ยิน [${alts.join(' / ')}] score=${r.best.toFixed(2)}${r.toneTrap ? ' trap=' + r.toneTrap : ''} ${Date.now() - t0}ms`);
         if (r.best >= 0.5) return done('auto', r);
         if (r.toneTrap) {
           const info = lookupHanzi(r.toneTrap);
@@ -1688,7 +1716,8 @@ function exSpeak(ex) {
         if (attempts === 3) offerSelf();
       } catch (err) {
         mic.classList.remove('on');
-        logW('sr', `${it.id} error ${err}`);
+        mic.querySelector('.mic-l').textContent = 'แตะแล้วพูด';
+        logW('sr', `${it.id} error ${err} ${Date.now() - t0}ms`);
         if (err === 'no-speech' || err === 'aborted') {
           attempts++;
           status.textContent = 'ไม่ได้ยินเสียง ลองพูดดังขึ้นอีกนิด';
@@ -1715,7 +1744,7 @@ function exSpeak(ex) {
       mic.querySelector('.mic-l').textContent = 'แตะเพื่อหยุด';
       status.textContent = 'กำลังอัด… พูดตามได้เลย';
       try {
-        ctl = startRecording(4000, l => meter.firstChild.style.width = Math.min(100, l * 800) + '%');
+        ctl = startRecording(5000, l => meter.firstChild.style.width = Math.min(100, l * 800) + '%', { autoStop: true });
         clip = await ctl.promise;
       } catch {
         status.textContent = 'ไม่ได้รับสิทธิ์ใช้ไมค์';
@@ -1779,7 +1808,7 @@ function exToneSpeak(ex) {
   const meter = h('div', { class: 'meter' }, h('i'));
 
   const showResult = r => {
-    logI('tone', `${t.pinyin} → ${r.reason || r.syl.map(s => `${s.target}:${s.got}`).join(' ')}`);
+    logI('tone', `${t.pinyin} → ${r.reason || r.syl.map(s => `${s.target}:${s.got}` + (s.curve ? ` [${s.curve.map(v => v.toFixed(1)).join(',')}]` : '')).join(' ')}`);
     if (r.reason) {
       res.replaceChildren();
       status.textContent = r.reason === 'quiet' ? 'ไม่ได้ยินเสียงชัด ลองพูดดังขึ้นใกล้ไมค์' : `ลองพูดให้ได้ ${t.tones.length} พยางค์ชัด ๆ เว้นจังหวะนิดหนึ่ง`;
@@ -1803,14 +1832,16 @@ function exToneSpeak(ex) {
 
   const renderMic = () => {
     const cal = !S.pitchProfile;
-    status.textContent = cal ? 'ครั้งแรก: แตะไมค์แล้วพูด "อาาา" ยาว ๆ ด้วยเสียงพูดปกติ 2 วินาที (เพื่อปรับให้เข้ากับเสียงคุณ)' : 'แตะไมค์ แล้วพูดชัด ๆ';
+    status.textContent = cal ? 'ครั้งแรก: แตะไมค์แล้วพูด "อาาา" ยาว ๆ ด้วยเสียงพูดปกติ 2 วินาที (เพื่อปรับให้เข้ากับเสียงคุณ)' : 'แตะไมค์ แล้วพูดชัด ๆ — หยุดพูดแล้วระบบจะตรวจเอง';
     const mic = micButton(cal ? 'ปรับเสียง' : 'แตะแล้วพูด', async () => {
       if (ctl) { ctl.stop(); return; }
       if (TTS.supported) speechSynthesis.cancel();
       mic.classList.add('on');
+      if (!cal) status.textContent = 'พูดได้เลย 🎙️';
       let clip;
       try {
-        ctl = startRecording(cal ? 2500 : 1100 + 650 * t.tones.length, l => meter.firstChild.style.width = Math.min(100, l * 800) + '%');
+        ctl = cal ? startRecording(2500, l => meter.firstChild.style.width = Math.min(100, l * 800) + '%')
+          : startRecording(4000, l => meter.firstChild.style.width = Math.min(100, l * 800) + '%', { autoStop: true });
         clip = await ctl.promise;
       } catch {
         status.textContent = 'ไม่ได้รับสิทธิ์ใช้ไมค์ — ข้ามข้อนี้ได้';
