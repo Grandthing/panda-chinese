@@ -127,7 +127,7 @@ addEventListener('pagehide', () => { saveNow(); Log.flush(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) { saveNow(); Log.flush(); } });
 
 // ============================================================ Debug log (ring buffer, kept across sessions → LINE / file)
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.3.0';
 const LOG_KEY = 'pandaTalk.log';
 const LOG_MAX = 400;
 const safeJson = v => { try { return JSON.stringify(v); } catch { return String(v); } };
@@ -1130,7 +1130,8 @@ function renderMe() {
       }))),
     h('section', { class: 'card-box' }, h('h3', {}, 'ความแม่นวรรณยุกต์ (จากข้อพูด)'), toneStatBars()),
     h('button', { class: 'btn btn-ghost', onclick: () => { location.hash = '#/settings'; } }, '⚙️ ตั้งค่า & สำรองข้อมูล'),
-    h('button', { class: 'btn btn-ghost', onclick: reportSheet }, '🐞 รายงานปัญหา / ส่ง log')));
+    h('button', { class: 'btn btn-ghost', onclick: reportSheet }, '🐞 รายงานปัญหา / ส่ง log'),
+    updateBtn()));
 }
 const statCard = (ic, v, label) => h('div', { class: 'stat-card' }, h('div', { class: 'sc-ic' }, ic), h('b', {}, v), h('small', {}, label));
 
@@ -1153,6 +1154,9 @@ function renderSettings() {
   const file = h('input', { type: 'file', accept: 'application/json,.json', hidden: true, onchange: e => importProgress(e.target.files[0]) });
   screen().replaceChildren(h('div', { class: 'settings' },
     h('div', { class: 'back-row' }, h('button', { class: 'icon-btn', 'aria-label': 'กลับ', onclick: () => { location.hash = '#/me'; } }, '←'), h('h2', { class: 'page-title' }, 'ตั้งค่า')),
+    h('section', { class: 'card-box' }, h('h3', {}, 'เวอร์ชันแอป'),
+      h('p', { class: 'muted' }, `ตอนนี้: ${APP_VERSION} · เนื้อหา ${C.version}`),
+      updateBtn('btn btn-jade')),
     h('section', { class: 'card-box' }, h('h3', {}, 'เป้าหมายรายวัน'), goalSel),
     h('section', { class: 'card-box' }, h('h3', {}, 'การแสดงผล'),
       toggle('showThai', 'แสดงคำอ่านไทย'), toggle('showHanzi', 'แสดงตัวจีน (ตัวเล็ก)'), toggle('sfx', 'เสียงเอฟเฟกต์')),
@@ -1259,6 +1263,46 @@ async function resetAll() {
   location.hash = '#/learn';
   location.reload();
 }
+
+// Manual update check: ask the service worker to re-fetch sw.js; a changed VERSION installs the new shell.
+function applyUpdate(w) {
+  saveNow(); Log.flush();
+  toast('กำลังอัปเดต…');
+  w.postMessage('skipWaiting');
+  setTimeout(() => location.reload(), 3000); // fallback if controllerchange never fires
+}
+async function checkUpdate(btn) {
+  const label = t => { if (btn) btn.textContent = t; };
+  label('⏳ กำลังเช็ค…');
+  logI('update', 'check from ' + APP_VERSION);
+  try {
+    const reg = 'serviceWorker' in navigator ? await navigator.serviceWorker.getRegistration() : null;
+    if (!reg) { location.reload(); return; }
+    if (reg.waiting) return applyUpdate(reg.waiting);
+    await reg.update();
+    const w = reg.installing || reg.waiting;
+    if (!w) { label(`✅ ล่าสุดแล้ว (${APP_VERSION})`); toast(`เป็นเวอร์ชันล่าสุดแล้ว (${APP_VERSION})`); return; }
+    label('⬇️ กำลังโหลดเวอร์ชันใหม่…');
+    await new Promise((res, rej) => {
+      if (w.state === 'installed') return res();
+      const tm = setTimeout(() => rej(new Error('timeout')), 20000);
+      w.addEventListener('statechange', () => {
+        if (w.state === 'installed' || w.state === 'activated') { clearTimeout(tm); res(); }
+        else if (w.state === 'redundant') { clearTimeout(tm); rej(new Error('install failed')); }
+      });
+    });
+    logI('update', 'found new version');
+    applyUpdate(reg.waiting || w);
+  } catch (e) {
+    logW('update', errText(e));
+    label(`🔄 เช็คอัปเดต (${APP_VERSION})`);
+    toast('เช็คอัปเดตไม่สำเร็จ ตรวจเน็ตแล้วลองใหม่');
+  }
+}
+const updateBtn = (cls = 'btn btn-ghost') => {
+  const b = h('button', { class: cls, onclick: () => checkUpdate(b) }, `🔄 เช็คอัปเดต (${APP_VERSION})`);
+  return b;
+};
 
 // Bug report: device summary + recent log, sent via LINE share URL (text) or the share sheet (full .txt file)
 let reportNote = '';
