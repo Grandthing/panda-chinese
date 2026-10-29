@@ -84,6 +84,7 @@ function defaultState() {
     },
     lessons: {},
     unlockedUpTo: null,
+    places: [],
     xp: { total: 0, byDate: {} },
     streak: { current: 0, longest: 0, lastDate: null, freezes: 0 },
     hearts: { count: 5, updatedAt: Date.now(), lastFullRefillDate: null },
@@ -127,7 +128,7 @@ addEventListener('pagehide', () => { saveNow(); Log.flush(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) { saveNow(); Log.flush(); } });
 
 // ============================================================ Debug log (ring buffer, kept across sessions → LINE / file)
-const APP_VERSION = '1.6.0';
+const APP_VERSION = '1.7.0';
 const LOG_KEY = 'pandaTalk.log';
 const LOG_MAX = 400;
 const safeJson = v => { try { return JSON.stringify(v); } catch { return String(v); } };
@@ -207,6 +208,7 @@ function lintContent() {
     for (const d of e.lesson.dialogs || []) for (const ln of d.lines) {
       if (ln.item) ref(ln.item, d.id);
       if (ln.answer) ref(ln.answer, d.id);
+      if (ln.answer && C.items[ln.answer]?.listenOnly) issues.push(`${d.id}: คำตอบ "${ln.answer}" เป็นคำฟังอย่างเดียว`);
       (ln.distractors || []).forEach(id => ref(id, d.id));
     }
   }
@@ -908,13 +910,19 @@ function unlockedIdx() { const e = S.unlockedUpTo && C.byId[S.unlockedUpTo]; ret
 function unlockTo(idx) {
   if (idx > unlockedIdx() && C.order[idx]) { S.unlockedUpTo = C.order[idx].id; save(); }
 }
+// Bonus units (bonus: true) are their own track, open from day one: each node opens when the previous bonus node is done.
+const isBonus = e => !!(e && e.unit && e.unit.bonus);
 function nodeState(e) {
   if (isDone(e.id)) return 'done';
+  if (isBonus(e)) {
+    const prev = C.order[e.index - 1];
+    return !isBonus(prev) || isDone(prev.id) ? 'current' : 'locked';
+  }
   const u = unlockedIdx();
   if (e.index === u) return 'current';
   return e.index < u ? 'open' : 'locked';
 }
-const courseDone = () => C.order.length > 0 && C.order.every(e => isDone(e.id));
+const courseDone = () => C.order.length > 0 && C.order.every(e => isBonus(e) || isDone(e.id));
 
 // ============================================================ Engine: build exercises
 const meaningKey = m => (m || '').replace(/\s*\(.*?\)\s*/g, '').trim();
@@ -938,7 +946,9 @@ function distractorIds(item, n, pool = []) {
 
 const mkListen = (it, pool) => ({ type: 'listen', item: it, options: shuffle([it.id, ...distractorIds(it, 3, pool)]) });
 const mkMeaning = (it, pool) => ({ type: 'meaning', item: it, options: shuffle([it.id, ...distractorIds(it, 3, pool)]) });
-const canBuild = it => words(it.pinyin).length >= 2 && !it.pinyin.includes('…');
+const canBuild = it => !it.listenOnly && words(it.pinyin).length >= 2 && !it.pinyin.includes('…');
+// listenOnly items are what locals say back: you only need to recognise them, so they're drilled by ear only.
+const canSpeak = it => !it.listenOnly;
 function mkBuild(it) {
   const py = words(it.pinyin), th = words(it.thai);
   const tiles = py.map((w, i) => ({ py: w, th: th.length === py.length ? th[i] : '' }));
@@ -962,7 +972,7 @@ function mkTone(set) {
   set = set || pick(C.toneSets, 1)[0];
   return set ? { type: 'tone', set, answer: Math.floor(rand() * set.hanzi.length) } : null;
 }
-const toneSpeakable = it => !it.npc && !it.pinyin.includes('…') && !/[A-Z]{2}|[a-z][A-Z]/.test(it.pinyin) &&
+const toneSpeakable = it => !it.npc && !it.listenOnly && !it.pinyin.includes('…') && !/[A-Z]{2}|[a-z][A-Z]/.test(it.pinyin) &&
   sylls(it.pinyin).length >= 1 && sylls(it.pinyin).length <= 2 && sylls(it.pinyin).some(s => s.tone !== 5);
 function mkToneSpeakItem(it) {
   return { type: 'tone_speak', target: { hanzi: it.hanzi, pinyin: it.pinyin, thai: it.thai, meaning: it.meaning, tones: sylls(it.pinyin).map(s => s.tone) } };
@@ -982,9 +992,9 @@ function mixedFor(its, n, pool, { speak = 1, tone = true } = {}) {
   for (let k = 0; k < n && list.length; k++) {
     const it = list[k % list.length];
     const r = rand();
-    out.push(canBuild(it) && r < 0.25 ? mkBuild(it) : r < 0.62 ? mkListen(it, pool) : mkMeaning(it, pool));
+    out.push(it.listenOnly || (r >= 0.2 && r < 0.65) ? mkListen(it, pool) : canBuild(it) && r < 0.2 ? mkBuild(it) : mkMeaning(it, pool));
   }
-  if (Speech.level() !== 'off') for (const it of pick(its, speak)) out.push({ type: 'speak', item: it });
+  if (Speech.level() !== 'off') for (const it of pick(its.filter(canSpeak), speak)) out.push({ type: 'speak', item: it });
   if (tone) { const t = mkTone(toneSetFor(its)); if (t) out.push(t); }
   return out;
 }
@@ -1003,15 +1013,16 @@ function buildSession(mode, entry) {
     for (const it of news) { q.push({ type: 'intro', item: it }); q.push(mkListen(it, pool)); }
     const p2 = [];
     for (const it of news) {
+      if (it.listenOnly) { p2.push(mkListen(it, pool), mkListen(it, pool)); continue; }
       p2.push(mkMeaning(it, pool));
       if (speakOK) p2.push({ type: 'speak', item: it });
       if (canBuild(it)) p2.push(mkBuild(it));
     }
     for (const it of reviews) {
-      p2.push(rand() < 0.5 ? mkListen(it, pool) : mkMeaning(it, pool));
+      p2.push(it.listenOnly || rand() < 0.6 ? mkListen(it, pool) : mkMeaning(it, pool));
       if (!news.length && canBuild(it) && rand() < 0.5) p2.push(mkBuild(it));
     }
-    if (!news.length && speakOK) for (const it of pick(reviews, 2)) p2.push({ type: 'speak', item: it });
+    if (!news.length && speakOK) for (const it of pick(reviews.filter(canSpeak), 2)) p2.push({ type: 'speak', item: it });
     const ts = toneSetFor(news.concat(reviews));
     if (ts || rand() < 0.5) { const t = mkTone(ts); if (t) p2.push(t); }
     q.push(...shuffle(p2));
@@ -1022,12 +1033,12 @@ function buildSession(mode, entry) {
     for (const d of L.dialogs || []) q.push(...expandDialog(d));
   } else if (mode === 'checkpoint') {
     const final = !!entry.lesson.final;
-    const ids = final ? uniq(C.units.flatMap(u => u.items)) : entry.unit.items;
+    const ids = final ? uniq(C.units.filter(u => !u.bonus).flatMap(u => u.items)) : entry.unit.items;
     const its = items(ids);
     q.push(...shuffle(mixedFor(its, entry.lesson.size || 12, ids, { speak: final ? 3 : 2 })));
     if (its.length >= 4) q.push(mkMatch(its));
     if (final) {
-      const dialogs = C.units.flatMap(u => u.lessons.flatMap(l => l.dialogs || []));
+      const dialogs = C.units.filter(u => !u.bonus).flatMap(u => u.lessons.flatMap(l => l.dialogs || []));
       for (const d of pick(dialogs, 2)) q.push(...expandDialog(d));
     }
   } else if (mode === 'review') {
@@ -1039,7 +1050,11 @@ function buildSession(mode, entry) {
   } else if (mode === 'skip') {
     const ids = uniq(C.units.filter(u => u.day < entry.unit.day).flatMap(u => u.items));
     const its = items(ids);
-    for (const it of pick(its, 10)) q.push(rand() < 0.5 ? mkListen(it, ids) : mkMeaning(it, ids));
+    for (const it of pick(its, 10)) q.push(it.listenOnly || rand() < 0.5 ? mkListen(it, ids) : mkMeaning(it, ids));
+  } else if (mode === 'listen') {
+    // Ear training: everything learned plus every "what locals say back" phrase, each heard in a random voice.
+    const ids = uniq(learnedIds().concat(Object.keys(C.items).filter(id => C.items[id].listenOnly)));
+    for (const it of pick(items(ids), 12)) q.push(mkListen(it, ids));
   } else if (mode === 'tone') {
     const speakable = items(learnedIds()).filter(toneSpeakable);
     for (let k = 0; k < 10; k++) {
@@ -1152,9 +1167,62 @@ async function showCard(it) {
     h('div', { class: 'card-hanzi', lang: 'zh-CN' }, it.hanzi.replace('…', ' …')),
     h('div', { class: 'card-py' }, pyEl(it.pinyin)),
     h('div', { class: 'card-th' }, it.thai + ' · ' + it.meaning),
-    h('button', { class: 'btn btn-primary card-play', onclick: () => TTS.speak(speakText(it), 0.85) }, '🔊 เล่นเสียงให้ฟัง')));
+    h('button', { class: 'btn btn-primary card-play', onclick: () => play(it) }, '🔊 เล่นเสียงให้ฟัง')));
   el.hidden = false;
   try { if (navigator.wakeLock) wakeLock = await navigator.wakeLock.request('screen'); } catch {}
+}
+
+// ---- My places: addresses to show a taxi driver (S.places = [{ th, hz }])
+const CHENGDU_PLACES = [
+  ['ศูนย์แพนด้า', '成都大熊猫繁育研究基地'], ['ตรอกกว้าง-ตรอกแคบ', '宽窄巷子'], ['ถนนโบราณจิ่นหลี่', '锦里古街'],
+  ['ถนนชุนซี', '春熙路'], ['ไท่กู่หลี่', '成都远洋太古里'], ['ศาลเจ้าอู่โหว', '武侯祠'], ['สวนประชาชน', '人民公园'],
+  ['สนามบินเทียนฝู่', '成都天府国际机场'], ['สนามบินซวงหลิว', '成都双流国际机场'], ['สถานีรถไฟเฉิงตูตะวันออก', '成都东站'],
+];
+async function showPlace(p) {
+  const el = $('#card');
+  const close = () => { el.hidden = true; el.replaceChildren(); try { wakeLock && wakeLock.release(); } catch {} wakeLock = null; };
+  const size = p.hz.length > 24 ? 28 : p.hz.length > 12 ? 40 : 56;
+  el.replaceChildren(h('div', { class: 'card-inner' },
+    h('button', { class: 'icon-btn card-close', 'aria-label': 'ปิด', onclick: close }, '✕'),
+    h('div', { class: 'card-th' }, '师傅，请带我去这里 🙏'),
+    h('div', { class: 'card-hanzi', lang: 'zh-CN', style: `font-size:${size}px` }, p.hz),
+    h('div', { class: 'card-th' }, p.th + ' · ช่วยพาไปที่นี่'),
+    h('button', { class: 'btn btn-primary card-play', onclick: () => TTS.speak('师傅，请带我去' + p.hz, 0.85) }, '🔊 อ่านให้คนขับฟัง')));
+  el.hidden = false;
+  try { if (navigator.wakeLock) wakeLock = await navigator.wakeLock.request('screen'); } catch {}
+}
+function addPlace(th, hz) {
+  hz = (hz || '').trim(); th = (th || '').trim() || hz;
+  if (!hz) { toast('ใส่ชื่อหรือที่อยู่ภาษาจีนก่อน'); return false; }
+  if (S.places.some(p => p.hz === hz)) { toast('มีสถานที่นี้แล้ว'); return false; }
+  S.places.push({ th, hz }); save();
+  logI('place', 'เพิ่ม ' + th);
+  return true;
+}
+function addPlaceSheet() {
+  const th = h('input', { type: 'text', class: 'search', placeholder: 'ชื่อเรียก เช่น โรงแรมของฉัน' });
+  const hz = h('textarea', { class: 'search', rows: '3', lang: 'zh-CN', placeholder: 'วางชื่อ/ที่อยู่ภาษาจีน (ก๊อปจากแอปจองโรงแรม หรือแผนที่)' });
+  let close;
+  const done = () => { close(); renderPhrases(); };
+  close = openSheet(h('div', { class: 'info-sheet' },
+    h('h3', {}, '📍 เพิ่มสถานที่'),
+    th, hz,
+    h('button', { class: 'btn btn-primary', onclick: () => { if (addPlace(th.value, hz.value)) done(); } }, 'บันทึก'),
+    h('p', { class: 'muted small' }, 'หรือแตะเพิ่มที่เที่ยวยอดฮิตในเฉิงตู:'),
+    h('div', { class: 'chips' }, ...CHENGDU_PLACES.filter(([, z]) => !S.places.some(p => p.hz === z))
+      .map(([t, z]) => h('button', { class: 'chip-btn', onclick: () => { if (addPlace(t, z)) done(); } }, '+ ' + t)))));
+}
+function placesBox() {
+  return h('section', { class: 'card-box places' },
+    h('h3', {}, '📍 สถานที่ของฉัน — โชว์คนขับแท็กซี่'),
+    ...S.places.map((p, i) => h('div', { class: 'phrase' },
+      h('button', { class: 'phrase-main', onclick: () => showPlace(p) },
+        h('div', { class: 'phrase-mean' }, p.th), h('div', { class: 'phrase-hz', lang: 'zh-CN' }, p.hz)),
+      h('button', { class: 'btn-play', 'aria-label': 'ลบ ' + p.th, onclick: async () => {
+        if (await confirmBox('ลบสถานที่?', p.th, 'ลบ', 'ยกเลิก', true)) { S.places.splice(i, 1); save(); renderPhrases(); }
+      } }, '✕'))),
+    S.places.length ? null : h('p', { class: 'muted small' }, 'ใส่ที่อยู่โรงแรมเป็นภาษาจีนไว้ แล้วแตะโชว์คนขับได้ทันที ใช้ได้แม้ไม่มีเน็ต'),
+    h('button', { class: 'btn btn-ghost', onclick: addPlaceSheet }, '+ เพิ่มสถานที่'));
 }
 
 // ============================================================ Views
@@ -1191,10 +1259,14 @@ function renderLearn() {
   if (isIOS && !isStandalone() && S.onboarded) wrap.append(h('button', { class: 'warn', onclick: installGuideSheet }, '📲 เพิ่มลงหน้าจอโฮม เพื่อไม่ให้ความคืบหน้าหาย — แตะดูวิธี'));
   if (S.lastExportDate === null ? Object.keys(S.lessons).length >= 6 : dayDiff(S.lastExportDate, today()) >= 5)
     wrap.append(h('button', { class: 'warn soft', onclick: exportProgress }, '💾 สำรองความคืบหน้า (แนะนำทุก 5 วัน) — แตะเพื่อบันทึกไฟล์'));
+  const bonus = C.order.filter(isBonus);
+  if (bonus.length && !bonus.every(e => isDone(e.id)))
+    wrap.append(h('button', { class: 'warn soft', onclick: () => document.getElementById('bonus-stage')?.scrollIntoView({ behavior: 'smooth', block: 'start' }) },
+      '🐼 บทพิเศษเฉิงตู + ฝึกฟัง เปิดให้เรียนได้เลย — แตะเพื่อไปที่บท'));
   let lastStage = null;
   let currentEl = null;
   for (const u of C.units) {
-    if (u.stage !== lastStage) { wrap.append(h('div', { class: 'stage' }, u.stage)); lastStage = u.stage; }
+    if (u.stage !== lastStage) { wrap.append(h('div', { class: 'stage', id: u.bonus ? 'bonus-stage' : null }, u.stage)); lastStage = u.stage; }
     const entries = C.order.filter(e => e.unit === u);
     const unitDone = entries.every(e => isDone(e.id));
     const path = h('div', { class: 'path' });
@@ -1207,16 +1279,16 @@ function renderLearn() {
         st === 'current' ? h('div', { class: 'node-tip' }, 'เริ่มตรงนี้') : null,
         h('button', { class: `node ${st} ${e.kind}`, 'aria-label': `${e.title} (${{ done: 'จบแล้ว', current: 'บทถัดไป', open: 'เปิดแล้ว', locked: 'ล็อค' }[st]})`, onclick: () => openNode(e) }, ic),
         rec && !rec.skipped ? h('div', { class: 'stars' }, '★'.repeat(rec.stars) + '☆'.repeat(3 - rec.stars)) : null);
-      if (st === 'current') currentEl = node;
+      if (st === 'current' && !isBonus(e)) currentEl = node;
       path.append(node);
     });
     wrap.append(h('section', { class: 'unit' + (unitDone ? ' done' : '') },
-      h('div', { class: 'unit-head' }, h('div', { class: 'unit-day' }, `วันที่ ${u.day}`), h('div', { class: 'unit-title' }, u.title), h('div', { class: 'unit-goal' }, u.goal)),
+      h('div', { class: 'unit-head' }, h('div', { class: 'unit-day' }, u.bonus ? `บทพิเศษ ${u.day - 20}` : `วันที่ ${u.day}`), h('div', { class: 'unit-title' }, u.title), h('div', { class: 'unit-goal' }, u.goal)),
       path));
   }
   if (courseDone()) wrap.append(h('section', { class: 'unit finish' }, pandaSay('party', 'จบหลักสูตร 20 วันแล้ว! ทบทวนและฝึกวรรณยุกต์ต่อได้ในแท็บทบทวน'),
     h('button', { class: 'btn btn-primary', onclick: certificateSheet }, '🏅 ดูใบประกาศ')));
-  else wrap.append(h('p', { class: 'muted center' }, 'บทเรียนวันที่ 21+ จะเพิ่มในอนาคต'));
+  else if (!C.units.some(u => u.bonus)) wrap.append(h('p', { class: 'muted center' }, 'บทเรียนวันที่ 21+ จะเพิ่มในอนาคต'));
   screen().replaceChildren(wrap);
   if (currentEl && !renderLearn.scrolled) { renderLearn.scrolled = true; setTimeout(() => currentEl.scrollIntoView({ block: 'center' }), 50); }
 }
@@ -1225,7 +1297,7 @@ function openNode(e) {
   const st = nodeState(e);
   if (st === 'locked') {
     const first = C.order.find(x => x.unit === e.unit);
-    if (first === e && e.unit.day > 1) {
+    if (first === e && e.unit.day > 1 && !isBonus(e)) {
       openSheet(h('div', { class: 'info-sheet' },
         h('h3', {}, `ข้ามไปวันที่ ${e.unit.day}?`),
         h('p', {}, `ทำแบบทดสอบ 10 ข้อจากวันที่ 1–${e.unit.day - 1} ถูก 80% ขึ้นไปจะปลดล็อคถึงวันนี้`),
@@ -1236,7 +1308,7 @@ function openNode(e) {
   const rec = S.lessons[e.id];
   const its = items(e.kind === 'lesson' ? (e.lesson.newItems || []) : e.unit.items);
   openSheet(h('div', { class: 'info-sheet' },
-    h('div', { class: 'muted' }, `วันที่ ${e.unit.day} · ${e.unit.title}`),
+    h('div', { class: 'muted' }, `${isBonus(e) ? 'บทพิเศษ ' + (e.unit.day - 20) : 'วันที่ ' + e.unit.day} · ${e.unit.title}`),
     h('h3', {}, e.title),
     rec ? h('div', { class: 'stars big' }, '★'.repeat(rec.stars) + '☆'.repeat(3 - rec.stars)) : null,
     its.length ? h('div', { class: 'chips' }, ...its.slice(0, 8).map(it => h('span', { class: 'chip' }, it.meaning))) : h('p', {}, 'สถานการณ์จำลอง ใช้ทุกอย่างที่เรียนมา'),
@@ -1268,6 +1340,7 @@ function renderPhrases() {
   screen().replaceChildren(h('div', { class: 'phrases' },
     h('h2', { class: 'page-title' }, 'การ์ดพูด'),
     h('p', { class: 'muted' }, 'แตะวลีเพื่อขยายตัวจีนให้คนจีนดู ใช้ได้แม้ไม่มีเน็ต'),
+    placesBox(),
     input,
     h('div', { class: 'chips scroll' }, chip('all', 'ทั้งหมด'), chip('survival', '⭐ เอาตัวรอด'),
       ...Object.entries(C.cats).map(([k, c]) => chip(k, `${c.icon} ${c.title}`))),
@@ -1293,6 +1366,10 @@ function renderReview() {
       h('h3', {}, `🔁 คำที่ถึงเวลาทบทวน: ${due.length} คำ`),
       h('p', { class: 'muted' }, 'ทบทวนไม่เสียหัวใจ และจบ 1 บทได้หัวใจคืน +1'),
       h('button', { class: 'btn btn-primary', disabled: learned.length < 3, onclick: () => startSession('review') }, learned.length < 3 ? 'เรียนบทแรกก่อน' : 'เริ่มทบทวน')),
+    h('section', { class: 'card-box' },
+      h('h3', {}, '👂 ฝึกฟังคนจีนพูด'),
+      h('p', { class: 'muted' }, 'ฟัง 12 ข้อ ทั้งคำที่เรียนแล้วและประโยคที่คนจีนมักพูดกับคุณ สุ่มเสียงคนพูดทุกข้อ · ไม่เสียหัวใจ · จบได้ +1 ❤️'),
+      h('button', { class: 'btn btn-jade', onclick: () => startSession('listen') }, '🎧 เริ่มฝึกฟัง')),
     h('section', { class: 'card-box' },
       h('h3', {}, '🎵 ห้องฝึกวรรณยุกต์'),
       h('p', { class: 'muted' }, Speech.toneAvailable() ? 'ฟังแยกเสียง + พูดแล้วดูเส้นเสียงของคุณเทียบกับเป้าหมาย (ทดลอง)' : 'ฝึกฟังแยกวรรณยุกต์ (เปิดสิทธิ์ไมค์เพื่อฝึกพูดด้วย)'),
@@ -1852,7 +1929,7 @@ function exIntro(ex) {
   setFoot(footBtn('ต่อไป', () => { srsUpdate(it.id, true); advance(); }, 'btn-primary'));
   setTimeout(() => play(it), 250);
   return h('div', { class: 'ex' },
-    h('div', { class: 'tag' }, '✨ คำใหม่'),
+    h('div', { class: 'tag' }, it.listenOnly ? '👂 ประโยคที่คนจีนจะพูดกับคุณ' : '✨ คำใหม่'),
     wordCard(it), playBtns(it),
     it.note ? pandaSay('hi', it.note) : null);
 }
@@ -2234,7 +2311,7 @@ function finishSession() {
     const e = sess.entry;
     const prev = S.lessons[e.id];
     S.lessons[e.id] = { stars: Math.max(stars, prev && !prev.skipped ? prev.stars : 0), best: Math.max(acc, prev ? prev.best || 0 : 0), attempts: (prev ? prev.attempts || 0 : 0) + 1, doneAt: today() };
-    unlockTo(e.index + 1);
+    if (!isBonus(e)) unlockTo(e.index + 1);
     goalHit = addXp(5); sess.xp += 5;
   } else if (sess.mode === 'skip') {
     if (acc >= 0.8) {

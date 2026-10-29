@@ -481,3 +481,7 @@ input, textarea, select { -webkit-user-select: text; user-select: text; -webkit-
 @media (min-width: 520px) {
   #lesson { border-left: 2px solid var(--line); border-right: 2px solid var(--line); }
 }
+.info-sheet .search { display: block; width: 100%; margin-bottom: 10px; font-family: inherit; }
+.info-sheet textarea.search { resize: vertical; }
+.places .phrase { margin-bottom: 8px; }
+.card-hanzi { word-break: break-all; }

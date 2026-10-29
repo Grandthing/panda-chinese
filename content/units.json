@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "contentVersion": "2026.10.29",
+  "contentVersion": "2026.10.29b",
   "categories": {
     "greeting": { "title": "ทักทาย", "icon": "👋" },
     "basic": { "title": "คำพื้นฐาน", "icon": "💬" },
@@ -15,7 +15,10 @@
     "time": { "title": "เวลา", "icon": "⏰" },
     "hotel": { "title": "โรงแรม", "icon": "🏨" },
     "sight": { "title": "เที่ยว & ช้อป", "icon": "📸" },
-    "emergency": { "title": "ฉุกเฉิน", "icon": "🚑" }
+    "emergency": { "title": "ฉุกเฉิน", "icon": "🚑" },
+    "reply": { "title": "ฟังคนจีนตอบ", "icon": "👂" },
+    "drink": { "title": "ชานม & ร้านค้า", "icon": "🧋" },
+    "chengdu": { "title": "เฉิงตู", "icon": "🐼" }
   },
   "items": {
     "nihao": { "hanzi": "你好", "pinyin": "nǐ hǎo", "thai": "หนี ห่าว", "meaning": "สวัสดี", "cat": "greeting", "survival": true, "accept": ["你好", "您好", "你好啊"], "note": "เขียน nǐ hǎo แต่พูดจริงเป็น ní hǎo เพราะเสียง 3 ติดกันสองตัว ตัวแรกจะกลายเป็นเสียง 2" },
@@ -214,7 +217,55 @@
     "npc_nijiao": { "hanzi": "你叫什么名字", "pinyin": "nǐ jiào shénme míngzi", "thai": "หนี่ เจี้ยว เสินเมอ หมิงจือ", "meaning": "คุณชื่ออะไร", "npc": true },
     "npc_nashiguoren": { "hanzi": "你是哪国人", "pinyin": "nǐ shì nǎ guó rén", "thai": "หนี่ ซื่อ หน่า กั๋ว เหริน", "meaning": "คุณเป็นคนชาติไหน", "npc": true },
     "npc_jizhang": { "hanzi": "要几张", "pinyin": "yào jǐ zhāng", "thai": "เย่า จี่ จาง", "meaning": "เอากี่ใบ", "npc": true },
-    "npc_huanying": { "hanzi": "欢迎光临", "pinyin": "huānyíng guānglín", "thai": "ฮวนหยิง กวางหลิน", "meaning": "ยินดีต้อนรับ", "npc": true }
+    "npc_huanying": { "hanzi": "欢迎光临", "pinyin": "huānyíng guānglín", "thai": "ฮวนหยิง กวางหลิน", "meaning": "ยินดีต้อนรับ", "npc": true },
+    "l_shaodeng": { "hanzi": "稍等", "pinyin": "shāo děng", "thai": "ซาว เติ่ง", "meaning": "รอสักครู่", "cat": "reply", "listenOnly": true, "note": "ฟังให้ออกก็พอ — พนักงานจะพูดตอนให้คุณรอ" },
+    "l_yaojige": { "hanzi": "要几个", "pinyin": "yào jǐ ge", "thai": "เย่า จี่ เก้อ", "meaning": "เอากี่อัน", "cat": "reply", "listenOnly": true, "note": "ฟังให้ออกก็พอ — ตอบด้วยตัวเลข เช่น liǎng ge (สองอัน)" },
+    "l_haiyaobiede": { "hanzi": "还要别的吗", "pinyin": "hái yào biéde ma", "thai": "ไห เย่า เปี๋ยเตอ มา", "meaning": "เอาอย่างอื่นอีกไหม", "cat": "reply", "listenOnly": true, "note": "ฟังให้ออกก็พอ — ถ้าพอแล้วตอบ bú yào le (ไม่เอาแล้ว)" },
+    "l_maiwanle": { "hanzi": "卖完了", "pinyin": "mài wán le", "thai": "ไม่ หวาน เลอ", "meaning": "ขายหมดแล้ว", "cat": "reply", "listenOnly": true, "note": "ฟังให้ออกก็พอ — ของที่อยากได้หมดแล้ว" },
+    "l_yaodaizima": { "hanzi": "要袋子吗", "pinyin": "yào dàizi ma", "thai": "เย่า ไต้จือ มา", "meaning": "เอาถุงไหม", "cat": "reply", "listenOnly": true, "note": "ฟังให้ออกก็พอ — ร้านในจีนคิดเงินค่าถุงเล็กน้อย" },
+    "l_saozheli": { "hanzi": "扫这里", "pinyin": "sǎo zhèlǐ", "thai": "ส่าว เจ้อหลี่", "meaning": "สแกนตรงนี้", "cat": "reply", "listenOnly": true, "note": "ฟังให้ออกก็พอ — คนขายจะชี้ QR ให้คุณสแกนจ่าย" },
+    "l_zhebianchi": { "hanzi": "在这儿吃还是带走", "pinyin": "zài zhèr chī háishi dàizǒu", "thai": "ไจ้ เจ้อร์ ชือ ไหสือ ไต้โจ่ว", "meaning": "ทานที่นี่หรือห่อกลับ", "cat": "reply", "listenOnly": true, "note": "ฟังให้ออกก็พอ — ตอบ zài zhèr chī (ทานที่นี่) หรือ dǎbāo (ห่อกลับ)" },
+    "l_buxing": { "hanzi": "不行", "pinyin": "bù xíng", "thai": "ปู้ สิง", "meaning": "ไม่ได้", "cat": "reply", "listenOnly": true, "note": "ฟังให้ออกก็พอ — ปฏิเสธ เช่น ต่อราคาไม่ได้" },
+    "l_keyi": { "hanzi": "可以", "pinyin": "kěyǐ", "thai": "เข่ออี่", "meaning": "ได้", "cat": "reply", "listenOnly": true, "note": "ฟังให้ออกก็พอ — ตอบรับว่าทำได้" },
+    "l_meiwenti": { "hanzi": "没问题", "pinyin": "méi wèntí", "thai": "เหมย เวิ่นถี๋", "meaning": "ไม่มีปัญหา", "cat": "reply", "listenOnly": true, "note": "ฟังให้ออกก็พอ — แปลว่าโอเค ได้เลย" },
+    "l_jiuzainabian": { "hanzi": "就在那边", "pinyin": "jiù zài nàbiān", "thai": "จิ้ว ไจ้ น่าเปียน", "meaning": "อยู่ตรงนั้นเลย", "cat": "reply", "listenOnly": true, "note": "ฟังให้ออกก็พอ — มักชี้มือไปด้วย" },
+    "l_zaiqianmian": { "hanzi": "在前面", "pinyin": "zài qiánmian", "thai": "ไจ้ เฉียนเมียน", "meaning": "อยู่ข้างหน้า", "cat": "reply", "listenOnly": true, "note": "ฟังให้ออกก็พอ — เดินตรงไปอีกนิด" },
+    "l_buyuan": { "hanzi": "不远", "pinyin": "bù yuǎn", "thai": "ปู้ หย่วน", "meaning": "ไม่ไกล", "cat": "reply", "listenOnly": true, "note": "ฟังให้ออกก็พอ — เดินไปได้" },
+    "l_henyuan": { "hanzi": "很远", "pinyin": "hěn yuǎn", "thai": "เหิ่น หย่วน", "meaning": "ไกลมาก", "cat": "reply", "listenOnly": true, "note": "ฟังให้ออกก็พอ — ควรเรียกแท็กซี่หรือนั่งรถไฟใต้ดิน" },
+    "l_wangqianzou": { "hanzi": "往前走", "pinyin": "wǎng qián zǒu", "thai": "หวัง เฉียน โจ่ว", "meaning": "เดินตรงไปข้างหน้า", "cat": "reply", "listenOnly": true, "note": "ฟังให้ออกก็พอ — คล้าย yìzhí zǒu (ตรงไป)" },
+    "l_zuoguai": { "hanzi": "左拐", "pinyin": "zuǒ guǎi", "thai": "จั๋ว ไกว่", "meaning": "เลี้ยวซ้าย", "cat": "reply", "listenOnly": true, "note": "ฟังให้ออกก็พอ — zuǒ = ซ้าย · guǎi = เลี้ยว" },
+    "l_youguai": { "hanzi": "右拐", "pinyin": "yòu guǎi", "thai": "โย่ว ไกว่", "meaning": "เลี้ยวขวา", "cat": "reply", "listenOnly": true, "note": "ฟังให้ออกก็พอ — yòu = ขวา · guǎi = เลี้ยว" },
+    "l_guomalu": { "hanzi": "过马路", "pinyin": "guò mǎlù", "thai": "กั้ว หม่าลู่", "meaning": "ข้ามถนน", "cat": "reply", "listenOnly": true, "note": "ฟังให้ออกก็พอ — ข้ามถนนไปอีกฝั่ง" },
+    "l_zoulu": { "hanzi": "走路十分钟", "pinyin": "zǒulù shí fēnzhōng", "thai": "โจ่วลู่ สือ เฟินจง", "meaning": "เดินสิบนาที", "cat": "reply", "listenOnly": true, "note": "ฟังให้ออกก็พอ — zǒulù = เดิน · fēnzhōng = นาที" },
+    "l_zuoditie": { "hanzi": "坐地铁", "pinyin": "zuò dìtiě", "thai": "จั้ว ตี้เถี่ย", "meaning": "นั่งรถไฟใต้ดิน", "cat": "reply", "listenOnly": true, "note": "ฟังให้ออกก็พอ — เขาแนะนำให้นั่งรถไฟใต้ดิน" },
+    "l_duche": { "hanzi": "堵车", "pinyin": "dǔchē", "thai": "ตู่เชอ", "meaning": "รถติด", "cat": "reply", "listenOnly": true, "note": "ฟังให้ออกก็พอ — คนขับแท็กซี่บ่นบ่อยมาก" },
+    "naicha": { "hanzi": "奶茶", "pinyin": "nǎichá", "thai": "หน่ายฉา", "meaning": "ชานม", "cat": "drink", "note": "ชานมไข่มุกคือ zhēnzhū nǎichá" },
+    "kafei": { "hanzi": "咖啡", "pinyin": "kāfēi", "thai": "คาเฟย", "meaning": "กาแฟ", "cat": "drink" },
+    "dabei": { "hanzi": "大杯", "pinyin": "dà bēi", "thai": "ต้า เปย", "meaning": "แก้วใหญ่", "cat": "drink", "note": "แก้วกลาง = zhōng bēi" },
+    "rede": { "hanzi": "热的", "pinyin": "rè de", "thai": "เร่อ เตอ", "meaning": "แบบร้อน", "cat": "drink", "note": "แบบเย็น = bīng de" },
+    "shaotang": { "hanzi": "少糖", "pinyin": "shǎo táng", "thai": "ส่าว ถัง", "meaning": "หวานน้อย", "cat": "drink", "note": "ไม่หวานเลย = bú yào táng" },
+    "qubing": { "hanzi": "去冰", "pinyin": "qù bīng", "thai": "ชวี่ ปิง", "meaning": "ไม่ใส่น้ำแข็ง", "cat": "drink", "note": "น้ำแข็งน้อย = shǎo bīng" },
+    "l_jifentang": { "hanzi": "几分糖", "pinyin": "jǐ fēn táng", "thai": "จี่ เฟิน ถัง", "meaning": "หวานกี่ส่วน", "cat": "reply", "listenOnly": true, "note": "ฟังให้ออกก็พอ — ร้านชานมจะถาม ตอบ shǎo táng (หวานน้อย)" },
+    "l_yaobingma": { "hanzi": "要冰的吗", "pinyin": "yào bīng de ma", "thai": "เย่า ปิง เตอ มา", "meaning": "เอาเย็นไหม", "cat": "reply", "listenOnly": true, "note": "ฟังให้ออกก็พอ — ตอบ rè de (ร้อน) หรือ qù bīng (ไม่ใส่น้ำแข็ง)" },
+    "bianlidian": { "hanzi": "便利店", "pinyin": "biànlìdiàn", "thai": "เปี้ยนลี่เตี้ยน", "meaning": "ร้านสะดวกซื้อ", "cat": "drink" },
+    "chongdianbao": { "hanzi": "充电宝", "pinyin": "chōngdiànbǎo", "thai": "ชงเตี้ยนเป่า", "meaning": "พาวเวอร์แบงค์ (ให้เช่า)", "cat": "drink", "note": "ในจีนมีตู้เช่าพาวเวอร์แบงค์ทุกร้าน สแกนจ่ายได้" },
+    "nengchongdianma": { "hanzi": "能充电吗", "pinyin": "néng chōngdiàn ma", "thai": "เหนิง ชงเตี้ยน มา", "meaning": "ชาร์จแบตได้ไหม", "cat": "drink" },
+    "shoujimeidianle": { "hanzi": "手机没电了", "pinyin": "shǒujī méi diàn le", "thai": "โส่วจี เหมย เตี้ยน เลอ", "meaning": "มือถือแบตหมด", "cat": "drink" },
+    "huoguo": { "hanzi": "火锅", "pinyin": "huǒguō", "thai": "หั่วกัว", "meaning": "หม้อไฟ (สุกี้เสฉวน)", "cat": "chengdu", "note": "อาหารขึ้นชื่อที่สุดของเฉิงตู" },
+    "yuanyangguo": { "hanzi": "鸳鸯锅", "pinyin": "yuānyāng guō", "thai": "ยวนยาง กัว", "meaning": "หม้อไฟสองช่อง (เผ็ด+ไม่เผ็ด)", "cat": "chengdu", "note": "ถ้ากินเผ็ดไม่เก่ง สั่งอันนี้ปลอดภัยสุด" },
+    "ma2": { "hanzi": "麻", "pinyin": "má", "thai": "หมา", "meaning": "ชาลิ้น (พริกไทยเสฉวน)", "cat": "chengdu", "note": "รสชาลิ้นของ huājiāo ต่างจากเผ็ด (là)" },
+    "buyaotaima": { "hanzi": "不要太麻", "pinyin": "bú yào tài má", "thai": "ปู๋ เย่า ไท่ หมา", "meaning": "ไม่เอาชามาก", "cat": "chengdu", "note": "bù กลายเป็น bú เพราะตามด้วยเสียง 4" },
+    "tailale": { "hanzi": "太辣了", "pinyin": "tài là le", "thai": "ไท่ ล่า เลอ", "meaning": "เผ็ดเกินไป", "cat": "chengdu" },
+    "mapodoufu": { "hanzi": "麻婆豆腐", "pinyin": "mápó dòufu", "thai": "หมาโผ เต้าฟุ", "meaning": "เต้าหู้หมาโผ", "cat": "chengdu", "note": "เต้าหู้ผัดซอสเผ็ดชา ต้นตำรับเฉิงตู" },
+    "dandanmian": { "hanzi": "担担面", "pinyin": "dàndàn miàn", "thai": "ตั้นตั้น เมี่ยน", "meaning": "บะหมี่ตั้นตั้น", "cat": "chengdu" },
+    "chuanchuan": { "hanzi": "串串", "pinyin": "chuànchuàn", "thai": "ชวั่นชวั่น", "meaning": "ไม้เสียบลวกหม้อไฟ", "cat": "chengdu", "note": "หยิบไม้เสียบเอง คิดเงินตามจำนวนไม้" },
+    "xiongmao": { "hanzi": "熊猫", "pinyin": "xióngmāo", "thai": "สยงมาว", "meaning": "แพนด้า", "cat": "chengdu", "note": "🐼 แพนด้า = xióngmāo" },
+    "xiongmaojidi": { "hanzi": "熊猫基地", "pinyin": "xióngmāo jīdì", "thai": "สยงมาว จีตี้", "meaning": "ศูนย์แพนด้า", "cat": "chengdu", "note": "ควรไปตอนเช้า แพนด้าตื่นตัวช่วง 8–10 โมง" },
+    "shifu": { "hanzi": "师傅", "pinyin": "shīfu", "thai": "ซือฟุ", "meaning": "พี่ (เรียกคนขับ/ช่าง)", "cat": "chengdu", "note": "ใช้เรียกคนขับแท็กซี่อย่างสุภาพ" },
+    "qingdaiwoqu": { "hanzi": "请带我去这里", "pinyin": "qǐng dài wǒ qù zhèlǐ", "thai": "ฉิ่ง ไต้ หวั่ว ชวี่ เจ้อหลี่", "meaning": "ช่วยพาไปที่นี่", "cat": "chengdu", "note": "พูดพร้อมชี้การ์ดที่อยู่ (แท็บการ์ดพูด → สถานที่ของฉัน)" },
+    "l_yaoshenmeguo": { "hanzi": "要什么锅", "pinyin": "yào shénme guō", "thai": "เย่า เสินเมอ กัว", "meaning": "เอาหม้อแบบไหน", "cat": "reply", "listenOnly": true, "note": "ฟังให้ออกก็พอ — ร้านหม้อไฟจะถาม ตอบ yuānyāng guō" },
+    "l_yaode": { "hanzi": "要得", "pinyin": "yào dé", "thai": "เย่า เต๋อ", "meaning": "ได้เลย (ภาษาเสฉวน)", "cat": "reply", "listenOnly": true, "note": "ฟังให้ออกก็พอ — คนเฉิงตูพูดแทน hǎo de" },
+    "l_bashi": { "hanzi": "巴适", "pinyin": "bāshì", "thai": "ปาซื่อ", "meaning": "สบาย เยี่ยม (ภาษาเสฉวน)", "cat": "reply", "listenOnly": true, "note": "ฟังให้ออกก็พอ — คนเฉิงตูชอบพูด แปลว่าดีมาก สบายใจ" }
   },
   "toneSets": [
     { "id": "ma", "hanzi": ["妈", "麻", "马", "骂"], "pinyin": ["mā", "má", "mǎ", "mà"], "thai": ["มา", "หมา", "หม่า", "ม่า"], "meaning": ["แม่", "ป่าน/ชา", "ม้า", "ด่า"] },
@@ -560,6 +611,10 @@
           ] }
       ],
       "checkpoint": { "id": "d20-cp", "size": 20, "final": true }
-    }
+    },
+    {"id": "d21", "day": 21, "bonus": true, "stage": "🐼 ภาคพิเศษ: เฉิงตู + ฝึกฟัง", "title": "ฟังคนขายตอบ", "goal": "ฟังออกเวลาคนขายถามหรือตอบกลับ", "lessons": [{"id": "d21-l1", "title": "รอสักครู่ เอากี่อัน", "newItems": ["l_shaodeng", "l_yaojige", "l_haiyaobiede", "l_maiwanle"]}, {"id": "d21-l2", "title": "ถุง สแกน ห่อกลับ", "newItems": ["l_yaodaizima", "l_saozheli", "l_zhebianchi"]}, {"id": "d21-l3", "title": "ได้ ไม่ได้", "newItems": ["l_buxing", "l_keyi", "l_meiwenti"], "dialogs": [{"id": "d21-dlg", "scene": "ซื้อขนมที่ร้านริมทาง", "lines": [{"who": "npc", "item": "npc_huanying"}, {"who": "me", "cue": "ชี้ขนมที่อยากได้", "answer": "woyaozhege", "distractors": ["zheli", "meiyou"]}, {"who": "npc", "item": "l_yaojige"}, {"who": "me", "cue": "เอาสองอัน", "answer": "liang3", "distractors": ["yi1", "shi2"]}, {"who": "npc", "item": "l_haiyaobiede"}, {"who": "me", "cue": "พอแล้ว", "answer": "buyaole", "distractors": ["zailaiyige", "woyaomai"]}, {"who": "npc", "item": "l_yaodaizima"}, {"who": "me", "cue": "ไม่เอาถุง", "answer": "buyao", "distractors": ["yao4", "dabao"]}, {"who": "npc", "item": "l_saozheli"}, {"who": "me", "answer": "haode", "distractors": ["meiguanxi", "zaijian"]}]}]}], "checkpoint": {"id": "d21-cp", "size": 12}},
+    {"id": "d22", "day": 22, "bonus": true, "stage": "🐼 ภาคพิเศษ: เฉิงตู + ฝึกฟัง", "title": "ฟังคนบอกทาง", "goal": "ฟังออกเวลาคนจีนบอกทางหรือคนขับคุยด้วย", "lessons": [{"id": "d22-l1", "title": "ตรงนั้น ข้างหน้า ไกลไหม", "newItems": ["l_jiuzainabian", "l_zaiqianmian", "l_buyuan", "l_henyuan"]}, {"id": "d22-l2", "title": "ตรงไป เลี้ยว ข้ามถนน", "newItems": ["l_wangqianzou", "l_zuoguai", "l_youguai", "l_guomalu"]}, {"id": "d22-l3", "title": "เดิน รถไฟ รถติด", "newItems": ["l_zoulu", "l_zuoditie", "l_duche"], "dialogs": [{"id": "d22-dlg", "scene": "ถามทางไปสถานีรถไฟใต้ดิน", "lines": [{"who": "me", "cue": "ถามคนแถวนั้นว่าสถานีรถไฟใต้ดินอยู่ไหน", "answer": "ditiezhan", "distractors": ["jichang", "cesuo"]}, {"who": "npc", "item": "l_wangqianzou"}, {"who": "npc", "item": "l_zuoguai"}, {"who": "npc", "item": "l_buyuan"}, {"who": "me", "cue": "เข้าใจแล้ว ขอบคุณ", "answer": "xiexie", "distractors": ["duibuqi", "zaishuoyibian"]}]}]}], "checkpoint": {"id": "d22-cp", "size": 12}},
+    {"id": "d23", "day": 23, "bonus": true, "stage": "🐼 ภาคพิเศษ: เฉิงตู + ฝึกฟัง", "title": "ชานม & ร้านสะดวกซื้อ", "goal": "สั่งชานมตามใจ และหาที่ชาร์จมือถือ", "lessons": [{"id": "d23-l1", "title": "ชานม กาแฟ", "newItems": ["naicha", "kafei", "dabei", "rede"]}, {"id": "d23-l2", "title": "หวานน้อย ไม่ใส่น้ำแข็ง", "newItems": ["shaotang", "qubing", "l_jifentang", "l_yaobingma"]}, {"id": "d23-l3", "title": "แบตหมด!", "newItems": ["bianlidian", "chongdianbao", "nengchongdianma", "shoujimeidianle"], "dialogs": [{"id": "d23-dlg", "scene": "สั่งชานมที่ร้าน", "lines": [{"who": "npc", "item": "npc_huanying"}, {"who": "me", "cue": "สั่งชานม", "answer": "naicha", "distractors": ["kafei", "pijiu"]}, {"who": "npc", "item": "l_jifentang"}, {"who": "me", "cue": "เอาหวานน้อย", "answer": "shaotang", "distractors": ["tian2", "qubing"]}, {"who": "npc", "item": "l_yaobingma"}, {"who": "me", "cue": "ไม่ใส่น้ำแข็ง", "answer": "qubing", "distractors": ["rede", "dabei"]}, {"who": "npc", "item": "l_zhebianchi"}, {"who": "me", "cue": "ห่อกลับ", "answer": "dabao", "distractors": ["maidan", "buyao"]}]}]}], "checkpoint": {"id": "d23-cp", "size": 12}},
+    {"id": "d24", "day": 24, "bonus": true, "stage": "🐼 ภาคพิเศษ: เฉิงตู + ฝึกฟัง", "title": "เที่ยวเฉิงตู", "goal": "กินหม้อไฟ ไปดูแพนด้า และคุยกับคนเฉิงตู", "lessons": [{"id": "d24-l1", "title": "หม้อไฟ เผ็ด ชา", "newItems": ["huoguo", "yuanyangguo", "ma2", "buyaotaima", "tailale"]}, {"id": "d24-l2", "title": "ของกินเฉิงตู", "newItems": ["mapodoufu", "dandanmian", "chuanchuan", "l_yaoshenmeguo"], "dialogs": [{"id": "d24-dlg1", "scene": "กินหม้อไฟกับเพื่อน", "lines": [{"who": "npc", "item": "npc_jiwei"}, {"who": "me", "answer": "liangwei", "distractors": ["yizhangpiao", "liang3"]}, {"who": "npc", "item": "l_yaoshenmeguo"}, {"who": "me", "cue": "เอาหม้อสองช่อง", "answer": "yuanyangguo", "distractors": ["huoguo", "chuanchuan"]}, {"who": "npc", "item": "npc_yaolama"}, {"who": "me", "cue": "เผ็ดน้อย", "answer": "weila", "distractors": ["tailale", "la4"]}, {"who": "me", "cue": "ไม่เอาชามาก", "answer": "buyaotaima", "distractors": ["buyaoxiangcai", "bula"]}, {"who": "npc", "item": "l_yaode"}]}]}, {"id": "d24-l3", "title": "ไปดูแพนด้า", "newItems": ["xiongmao", "xiongmaojidi", "shifu", "qingdaiwoqu", "l_yaode", "l_bashi"], "dialogs": [{"id": "d24-dlg2", "scene": "นั่งแท็กซี่ไปศูนย์แพนด้า", "lines": [{"who": "npc", "item": "npc_quna"}, {"who": "me", "cue": "ไปศูนย์แพนด้า", "answer": "xiongmaojidi", "distractors": ["jichang", "yiyuan"]}, {"who": "npc", "item": "l_henyuan"}, {"who": "npc", "item": "l_duche"}, {"who": "me", "cue": "ไม่เป็นไร ตกลง", "answer": "haode", "distractors": ["buyaole", "tingzheli"]}, {"who": "npc", "item": "npc_daole"}, {"who": "me", "answer": "xiexie", "distractors": ["duibuqi", "nihao"]}]}]}], "checkpoint": {"id": "d24-cp", "size": 14}}
   ]
 }
