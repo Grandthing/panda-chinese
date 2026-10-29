@@ -1,6 +1,6 @@
 // Service worker: app shell cache-first, lesson content network-first (so new lessons arrive without a version bump).
 // Bump VERSION whenever index.html / app.js / style.css / icons change.
-const VERSION = 'v1.3.1';
+const VERSION = 'v1.3.2';
 const CACHE = 'panda-talk-' + VERSION;
 const SHELL = [
   './',
@@ -16,7 +16,9 @@ const SHELL = [
 ];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)));
+  // cache: 'reload' bypasses the browser HTTP cache (GitHub Pages sends max-age=600),
+  // otherwise a new version could be installed with the previous version's files.
+  e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL.map(u => new Request(u, { cache: 'reload' })))));
 });
 
 self.addEventListener('activate', e => {
