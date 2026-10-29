@@ -127,7 +127,7 @@ addEventListener('pagehide', () => { saveNow(); Log.flush(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) { saveNow(); Log.flush(); } });
 
 // ============================================================ Debug log (ring buffer, kept across sessions → LINE / file)
-const APP_VERSION = '1.3.2';
+const APP_VERSION = '1.4.0';
 const LOG_KEY = 'pandaTalk.log';
 const LOG_MAX = 400;
 const safeJson = v => { try { return JSON.stringify(v); } catch { return String(v); } };
@@ -289,20 +289,27 @@ const TTS = {
   voices: [], voice: null, unlocked: false,
   init() {
     if (!this.supported) return;
-    const load = () => {
-      const n = this.voices.length;
-      this.voices = speechSynthesis.getVoices().filter(v => /^(zh[-_](cn|hans)|cmn)/i.test(v.lang));
-      this.pick();
-      if (this.voices.length !== n) logI('tts', `เสียงจีน ${this.voices.length}: ${this.voices.map(v => v.name + (v.localService ? '' : '(net)')).join(', ')} → ใช้ ${this.voice ? this.voice.name : '-'}`);
-    };
-    load();
+    this.load();
+    const load = () => this.load();
     speechSynthesis.addEventListener ? speechSynthesis.addEventListener('voiceschanged', load) : (speechSynthesis.onvoiceschanged = load);
+  },
+  load() {
+    if (!this.supported) return;
+    const n = this.voices.length;
+    // Best first: premium > enhanced > standard, on-device before network.
+    this.voices = speechSynthesis.getVoices().filter(v => /^(zh[-_](cn|hans)|cmn)/i.test(v.lang))
+      .sort((a, b) => this.quality(b) - this.quality(a) || b.localService - a.localService);
+    this.pick();
+    if (this.voices.length !== n) logI('tts', `เสียงจีน ${this.voices.length}: ${this.voices.map(v => v.name + (v.localService ? '' : '(net)')).join(', ')} → ใช้ ${this.voice ? this.voice.name : '-'}`);
+  },
+  // 2 = premium, 1 = enhanced, 0 = standard (iOS puts the tier in the name and in voiceURI)
+  quality(v) {
+    const s = v.name + ' ' + v.voiceURI;
+    return /premium|พรีเมียม|高级|優質/i.test(s) ? 2 : /enhanced|ปรับปรุง|增强|強化/i.test(s) ? 1 : 0;
   },
   pick() {
     const pref = S.settings.voiceURI && this.voices.find(v => v.voiceURI === S.settings.voiceURI);
-    const good = /enhanced|premium|ปรับปรุง|พรีเมียม|增强|高级/i;
-    this.voice = pref || this.voices.find(v => v.localService && good.test(v.name)) ||
-      this.voices.find(v => v.localService) || this.voices[0] || null;
+    this.voice = pref || this.voices.find(v => v.localService) || this.voices[0] || null;
   },
   unlock() {
     if (!this.supported || this.unlocked) return;
@@ -406,6 +413,8 @@ function scoreSpeech(item, alts) {
       const sim = a.includes(t) ? 1 : 1 - levenshtein(a, t) / Math.max(a.length, t.length);
       if (sim > best) { best = sim; heard = raw; }
     }
+    // Homophones / tone-sandhi spellings (泥好 for 你好, 前 for 钱) are correct speech.
+    if (best < 1) { const d = speechDiff(item, raw); if (d && !d.extra && d.syl.every(s => s.kind === 'ok')) { best = 1; heard = raw; } }
   }
   if (best < 0.8) {
     for (const raw of alts) {
@@ -420,6 +429,113 @@ function lookupHanzi(hz) {
   for (const it of Object.values(C.items)) if (normZh(it.hanzi) === hz) return { pinyin: it.pinyin, meaning: it.meaning };
   for (const ts of C.toneSets) { const i = ts.hanzi.indexOf(hz); if (i >= 0) return { pinyin: ts.pinyin[i], meaning: ts.meaning[i] }; }
   return null;
+}
+
+// Pinyin of single characters, learned from the content itself (item hanzi ↔ pinyin syllables).
+// content/charpy.json (3755 common hanzi by toned syllable) fills in characters the lessons don't use,
+// e.g. a homophone the recogniser wrote instead.
+let charPyMap = null, charPyExtra = null;
+fetch('content/charpy.json').then(r => r.ok ? r.json() : null).then(d => { charPyExtra = d; charPyMap = null; }).catch(() => {});
+function charPy() {
+  if (charPyMap) return charPyMap;
+  charPyMap = {};
+  if (charPyExtra) for (const [py, cs] of Object.entries(charPyExtra)) for (const c of cs) charPyMap[c] = py;
+  const add = (hz, py) => {
+    const cs = [...normZh(hz)], ss = sylls(py);
+    if (cs.length === ss.length) cs.forEach((c, i) => { if (!seen.has(c)) { seen.add(c); charPyMap[c] = ss[i].text.toLowerCase(); } });
+  };
+  const seen = new Set(); // lesson readings win over the generic table (first lesson reading wins)
+  for (const it of Object.values(C.items)) add(it.hanzi, it.pinyin);
+  for (const ts of C.toneSets) ts.hanzi.forEach((hz, i) => add(hz, ts.pinyin[i]));
+  return charPyMap;
+}
+const INITIAL_RE = /^(zh|ch|sh|[bpmfdtnlgkhjqxrzcsyw])?/;
+// Same syllable with another tone mark (tone 5 = no mark).
+function retone(py, tone) {
+  const base = py.normalize('NFD').replace(/[̄́̌̀]/g, '');
+  if (tone === 5) return base.normalize('NFC');
+  const mark = { 1: '̄', 2: '́', 3: '̌', 4: '̀' }[tone];
+  let at = /[ae]/.test(base) ? base.search(/[ae]/) : base.includes('ou') ? base.indexOf('o') : base.search(/[aeiou]̈?[^aeioü]*$/);
+  if (base[at + 1] === '̈') at++; // ü: tone mark goes after the diaeresis
+  return (base.slice(0, at + 1) + mark + base.slice(at + 1)).normalize('NFC');
+}
+function splitSyl(s) {
+  const b = stripTones(s), ini = b.match(INITIAL_RE)[0];
+  return { ini, fin: b.slice(ini.length), tone: toneOf(s) };
+}
+// Aligns what the recogniser wrote with the target, syllable by syllable, so a miss can say *what* was off:
+// ok | tone | initial | final | other (different word) | missing.
+function speechDiff(item, heardRaw) {
+  const tc = [...normZh(item.hanzi)], ts = sylls(item.pinyin), hc = [...normZh(heardRaw)];
+  if (!tc.length || tc.length !== ts.length || !hc.length) return null;
+  const map = charPy();
+  // What a native speaker actually says: 3+3 → 2+3; a neutral-tone syllable may come back with any tone.
+  const spoken = spokenTones(ts.map(s => s.tone));
+  const want = ts.map((s, i) => retone(s.text.toLowerCase(), spoken[i].tone));
+  const same = (i, j) => {
+    const hp = map[hc[j]];
+    return tc[i] === hc[j] || (!!hp && (hp === want[i] || hp === ts[i].text.toLowerCase() || (ts[i].tone === 5 && stripTones(hp) === stripTones(want[i]))));
+  };
+  const n = tc.length, m = hc.length;
+  const D = Array.from({ length: n + 1 }, (_, i) => Array.from({ length: m + 1 }, (_, j) => (i && j ? 0 : i + j)));
+  for (let i = 1; i <= n; i++) for (let j = 1; j <= m; j++)
+    D[i][j] = Math.min(D[i - 1][j - 1] + (same(i - 1, j - 1) ? 0 : 1), D[i - 1][j] + 1, D[i][j - 1] + 1);
+  const got = Array(n).fill(null);
+  let extra = 0;
+  for (let i = n, j = m; i > 0 || j > 0;) {
+    if (i && j && D[i][j] === D[i - 1][j - 1] + (same(i - 1, j - 1) ? 0 : 1)) { got[i - 1] = j - 1; i--; j--; }
+    else if (i && D[i][j] === D[i - 1][j] + 1) i--;
+    else { extra++; j--; }
+  }
+  const syl = tc.map((hz, i) => {
+    const py = ts[i].text;
+    if (got[i] === null) return { hz, py, kind: 'missing' };
+    const heard = hc[got[i]];
+    if (same(i, got[i])) return { hz, py, kind: 'ok' };
+    const heardPy = map[heard];
+    if (!heardPy) return { hz, py, kind: 'other', heard };
+    const a = splitSyl(want[i]), b = splitSyl(heardPy);
+    a.sandhi = spoken[i].tone !== ts[i].tone;
+    const kind = a.ini === b.ini && a.fin === b.fin ? 'tone' : a.fin === b.fin ? 'initial' : a.ini === b.ini ? 'final' : 'other';
+    return { hz, py, kind, heard, heardPy, a, b };
+  });
+  return { syl, extra };
+}
+const INI_HINT = {
+  zh: 'zh = "จ" แบบม้วนลิ้นขึ้นแตะเพดาน', ch: 'ch = "ช" ม้วนลิ้น + พ่นลมแรง', sh: 'sh = "ซ" ม้วนลิ้น', r: 'r = ม้วนลิ้นคล้าย "ร" ปน "ย" ไม่รัวลิ้น',
+  z: 'z = "จ" ปลายลิ้นแตะหลังฟัน ไม่ม้วน', c: 'c = "ทซ" ปลายลิ้นแตะฟัน + พ่นลม', s: 's = "ซ" ธรรมดา ไม่ม้วนลิ้น',
+  j: 'j = "จ" ลิ้นแบน ไม่ม้วน', q: 'q = "ช" ลิ้นแบน + พ่นลมแรง', x: 'x = "ซ" ลิ้นแบน ยิ้มนิด ๆ',
+  b: 'b = "ป" ไม่พ่นลม', p: 'p = "พ" พ่นลมแรง', d: 'd = "ต" ไม่พ่นลม', t: 't = "ท" พ่นลมแรง', g: 'g = "ก" ไม่พ่นลม', k: 'k = "ค" พ่นลมแรง',
+  h: 'h = "ฮ" ขูดคอนิด ๆ', f: 'f = "ฟ" ฟันบนแตะริมฝีปากล่าง', l: 'l = "ล" ชัด ๆ', n: 'n = "น" ไม่ใช่ "ล"',
+};
+const DIFF_LABEL = { tone: 'วรรณยุกต์', initial: 'พยัญชนะ', final: 'สระ', other: 'คนละคำ', missing: 'ไม่ได้ยิน' };
+function diffLine(s) {
+  const P = p => h('b', {}, pyEl(p));
+  switch (s.kind) {
+    case 'missing': return [P(s.py), ' — ระบบไม่ได้ยินพยางค์นี้ ออกเสียงให้ครบ อย่ากลืนคำ'];
+    case 'tone': return [P(s.py), ` — วรรณยุกต์ผิด: คุณออกเป็น `, P(s.heardPy), ` (${TONE_NAME[s.b.tone]}) ต้องเป็น ${TONE_NAME[s.a.tone]}`,
+      s.a.sandhi ? ' (เสียง 3 ที่ตามด้วยเสียง 3 จะพูดเป็นเสียง 2)' : '',
+      TONE_HINT[s.a.tone] ? [h('br'), '💡 ' + TONE_HINT[s.a.tone]] : null];
+    case 'initial': return [P(s.py), ` — พยัญชนะต้นผิด: ได้ยินเป็น `, P(s.heardPy), ` ต้องขึ้นต้นด้วย "${s.a.ini || 'สระ'}"`,
+      INI_HINT[s.a.ini] ? [h('br'), '💡 ' + INI_HINT[s.a.ini]] : null];
+    case 'final': return [P(s.py), ' — สระ/เสียงท้ายผิด: ได้ยินเป็น ', P(s.heardPy), ` ต้องลงท้ายด้วย "${s.a.fin}"`,
+      /ng$/.test(s.a.fin) !== /ng$/.test(s.b.fin) ? [h('br'), '💡 -ng = เสียงสะกด "ง" ส่วน -n = สะกด "น" ต้องแยกให้ชัด'] : null];
+    default: return [P(s.py), ' — ระบบได้ยินเป็น ', h('b', { lang: 'zh-CN' }, s.heard), s.heardPy ? [' ', pyEl(s.heardPy)] : null, ' ซึ่งเป็นคนละเสียง ฟังต้นแบบช้า ๆ แล้วลองใหม่'];
+  }
+}
+// Chips (one per syllable; tap = hear that syllable) plus one explanation line per wrong syllable.
+function diffView(item, heard) {
+  const d = speechDiff(item, heard);
+  if (!d) return null;
+  const bad = d.syl.filter(s => s.kind !== 'ok');
+  const canPlay = s => toneOf(s.py) !== 5 && !/[一不]/.test(s.hz);
+  return h('div', { class: 'diff' },
+    h('div', { class: 'syl-row wrap' }, ...d.syl.map(s => h(canPlay(s) ? 'button' : 'div', {
+      class: 'syl ' + (s.kind === 'ok' ? 'ok' : 'no'), onclick: canPlay(s) ? () => TTS.speak(s.hz, 0.6) : null,
+    }, h('b', {}, pyEl(s.py)), h('small', {}, s.kind === 'ok' ? '✓' : '✕ ' + DIFF_LABEL[s.kind])))),
+    ...bad.map(s => h('p', { class: 'hint' }, ...diffLine(s))),
+    d.extra && !bad.length ? h('p', { class: 'hint' }, 'มีเสียงอื่นปนมาด้วย ลองพูดเฉพาะคำนี้') : null,
+    bad.some(canPlay) ? h('p', { class: 'muted small' }, 'แตะพยางค์เพื่อฟังทีละพยางค์') : null);
 }
 
 // ============================================================ Recorder (getUserMedia → Float32 samples)
@@ -1141,8 +1257,23 @@ function renderSettings() {
   const set = (k, v) => { s[k] = v; save(); };
   const toggle = (k, label) => h('label', { class: 'row' }, h('span', {}, label),
     h('input', { type: 'checkbox', class: 'switch', checked: s[k], onchange: e => { set(k, e.target.checked); if (k === 'unlimitedHearts') renderSettings(); } }));
-  const voiceSel = h('select', { 'aria-label': 'เลือกเสียง', onchange: e => { set('voiceURI', e.target.value || null); TTS.pick(); TTS.speak('你好'); } },
-    h('option', { value: '' }, 'อัตโนมัติ'), ...TTS.voices.map(v => h('option', { value: v.voiceURI, selected: s.voiceURI === v.voiceURI }, `${v.name}${v.localService ? '' : ' (ออนไลน์)'}`)));
+  const QLABEL = ['มาตรฐาน', '⭐ ปรับปรุง', '💎 พรีเมียม'];
+  const voiceNow = h('p', { class: 'muted' });
+  const showNow = () => voiceNow.textContent = TTS.voices.length ? `พบเสียงจีน ${TTS.voices.length} เสียง · ใช้: ${TTS.voice ? TTS.voice.name : '-'}` : '⚠️ ไม่พบเสียงจีนในเครื่อง — โหลดเพิ่มได้ตามวิธีด้านล่าง';
+  showNow();
+  const voiceList = h('div', { class: 'voice-list' }, ...[null, ...TTS.voices].map(v => {
+    const on = v ? s.voiceURI === v.voiceURI : !s.voiceURI;
+    const b = h('button', { class: 'voice' + (on ? ' on' : ''), onclick: () => {
+      set('voiceURI', v ? v.voiceURI : null); TTS.pick(); showNow();
+      voiceList.querySelectorAll('.voice').forEach(x => x.classList.toggle('on', x === b));
+      TTS.speak('你好，欢迎来中国');
+    } },
+      h('span', { class: 'v-name' }, v ? v.name.replace(/\s*[(（].*[)）]\s*$/, '') : 'อัตโนมัติ'),
+      h('small', {}, v ? QLABEL[TTS.quality(v)] + (v.localService ? '' : ' · ออนไลน์') : 'เลือกเสียงที่ดีที่สุดให้'),
+      h('span', { class: 'v-ic' }, '🔊'));
+    return b;
+  }));
+  const noBetter = TTS.voices.length && !TTS.voices.some(v => TTS.quality(v) > 0);
   const rate = h('input', { type: 'range', min: '0.5', max: '1.2', step: '0.1', value: s.ttsRate, 'aria-label': 'ความเร็วเสียง' });
   rate.addEventListener('change', () => { set('ttsRate', +rate.value); TTS.speak('谢谢'); });
   const micSel = h('select', { 'aria-label': 'โหมดไมค์', onchange: e => { set('micMode', e.target.value); renderSettings(); } },
@@ -1162,10 +1293,17 @@ function renderSettings() {
     h('section', { class: 'card-box' }, h('h3', {}, 'การแสดงผล'),
       toggle('showThai', 'แสดงคำอ่านไทย'), toggle('showHanzi', 'แสดงตัวจีน (ตัวเล็ก)'), toggle('sfx', 'เสียงเอฟเฟกต์')),
     h('section', { class: 'card-box' }, h('h3', {}, 'เสียงจีน (TTS)'),
-      h('p', { class: 'muted' }, TTS.voices.length ? `พบเสียงจีน ${TTS.voices.length} เสียง · ใช้: ${TTS.voice ? TTS.voice.name : '-'}` : '⚠️ ไม่พบเสียงจีนในเครื่อง — ดูวิธีติดตั้งในหน้าช่วยเหลือ'),
-      h('label', { class: 'row' }, h('span', {}, 'เสียง'), voiceSel),
+      voiceNow, voiceList,
       h('label', { class: 'row' }, h('span', {}, 'ความเร็ว'), rate),
-      h('button', { class: 'btn btn-ghost', onclick: () => TTS.speak('你好，欢迎来中国') }, '🔊 ทดสอบเสียง')),
+      h('details', { class: 'howto', open: !TTS.voices.length || noBetter },
+        h('summary', {}, '📥 โหลดเสียงจีนเพิ่ม (ฟรี)'),
+        h('ol', {},
+          h('li', {}, 'เปิดแอป "ตั้งค่า" ของ iPhone → ', h('b', {}, 'การช่วยการเข้าถึง → เนื้อหาที่พูด → เสียง')),
+          h('li', {}, 'เลือก ', h('b', {}, 'จีน (จีนแผ่นดินใหญ่)'), ' — ไม่ใช่ไต้หวันหรือฮ่องกง'),
+          h('li', {}, 'แตะชื่อเสียง เช่น Tingting, Lili, Yu-shu, Li-mu แล้วแตะ ☁️ โหลดแบบ ', h('b', {}, '"ปรับปรุง"'), ' หรือ ', h('b', {}, '"พรีเมียม"'), ' (ถ้ามี) — ไฟล์ใหญ่ ควรใช้ Wi-Fi'),
+          h('li', {}, 'ปัดปิดแอปแพนด้าแล้วเปิดใหม่ → กลับมาหน้านี้ แตะเสียงที่มี ⭐ หรือ 💎')),
+        h('p', { class: 'muted small' }, 'เสียงที่โหลดแล้วใช้ได้แม้ไม่มีเน็ต · เสียง Siri ใช้ในเว็บแอปไม่ได้ (Apple ไม่เปิดให้) · ถ้าโหลดแล้วไม่ขึ้นในรายการ แปลว่า iOS ยังไม่ให้เว็บใช้เสียงนั้น'),
+        h('button', { class: 'btn btn-ghost', onclick: () => { TTS.load(); renderSettings(); toast(`พบเสียงจีน ${TTS.voices.length} เสียง`); } }, '🔄 ค้นหาเสียงใหม่'))),
     h('section', { class: 'card-box' }, h('h3', {}, 'ไมค์ & ข้อพูด'),
       h('label', { class: 'row' }, h('span', {}, 'โหมด'), micSel),
       h('p', { class: 'muted' }, 'ระดับที่ใช้ได้ตอนนี้: ' + lvlText),
@@ -1211,7 +1349,7 @@ function renderHelp() {
     h('div', { class: 'back-row' }, h('button', { class: 'icon-btn', 'aria-label': 'กลับ', onclick: () => history.back() }, '←'), h('h2', { class: 'page-title' }, 'ช่วยเหลือ')),
     sec('📲 ติดตั้งบน iPhone', 'เปิดเว็บนี้ใน Safari → แตะปุ่มแชร์ (สี่เหลี่ยมมีลูกศรชี้ขึ้น) → "เพิ่มลงหน้าจอโฮม" → เปิดแอปจากไอคอนแพนด้าทุกครั้ง',
       'สำคัญ: ความคืบหน้าในแท็บ Safari กับในแอปที่ติดตั้งแยกกัน และข้อมูลในแท็บ Safari อาจถูกลบถ้าไม่ได้เปิด 7 วัน'),
-    sec('🔊 เสียงจีนชัดขึ้น (ฟรี)', 'iPhone: ตั้งค่า → การช่วยการเข้าถึง → เนื้อหาที่พูด → เสียง → จีน (จีนแผ่นดินใหญ่) → ดาวน์โหลดเสียงแบบ "ปรับปรุง" หรือ "พรีเมียม" แล้วกลับมาเลือกในหน้าตั้งค่าของแอป',
+    sec('🔊 เสียงจีนชัดขึ้น (ฟรี)', 'iPhone: ตั้งค่า → การช่วยการเข้าถึง → เนื้อหาที่พูด → เสียง → จีน (จีนแผ่นดินใหญ่) → ดาวน์โหลดเสียงแบบ "ปรับปรุง" หรือ "พรีเมียม" → ปิดแอปแล้วเปิดใหม่ → ตั้งค่าของแอป → แตะเลือกเสียงที่มี ⭐/💎',
       'เสียงที่ดาวน์โหลดไว้ใช้ได้แม้ไม่มีเน็ต รวมถึงตอนอยู่ในจีน'),
     sec('🎙️ ระบบตรวจคำพูด', 'ต้องเปิด: ตั้งค่า → ทั่วไป → แป้นพิมพ์ → "เปิดใช้การป้อนตามคำบอก" และเพิ่มแป้นพิมพ์จีน (ตัวย่อ)',
       'ถ้าใช้ไม่ได้ แอปจะเปลี่ยนเป็น "อัดเสียงแล้วฟังเทียบเอง" ให้อัตโนมัติ',
@@ -1718,6 +1856,7 @@ function exSpeak(ex) {
   const it = ex.item;
   const box = h('div', { class: 'speak-box' });
   const status = h('div', { class: 'speak-status', role: 'status' });
+  const diffBox = h('div');
   let attempts = 0, finished = false;
 
   const done = (kind, r) => {
@@ -1751,13 +1890,27 @@ function exSpeak(ex) {
         mic.querySelector('.mic-l').textContent = 'แตะแล้วพูด';
         const r = scoreSpeech(it, alts);
         attempts++;
-        logI('sr', `${it.id} ได้ยิน [${alts.join(' / ')}] score=${r.best.toFixed(2)}${r.toneTrap ? ' trap=' + r.toneTrap : ''} ${Date.now() - t0}ms`);
-        if (r.best >= 0.5) return done('auto', r);
-        if (r.toneTrap) {
+        const dv = r.best < 1 ? diffView(it, r.heard) : null;
+        const dd = speechDiff(it, r.heard);
+        logI('sr', `${it.id} ได้ยิน [${alts.join(' / ')}] score=${r.best.toFixed(2)}${r.toneTrap ? ' trap=' + r.toneTrap : ''}` +
+          (dd ? ' diff=' + dd.syl.map(s => s.kind === 'ok' ? '✓' : s.kind + (s.heardPy ? ':' + s.heardPy : '')).join(',') : '') + ` ${Date.now() - t0}ms`);
+        diffBox.replaceChildren(dv || '');
+        if (dv) setTimeout(() => diffBox.scrollIntoView({ block: 'nearest', behavior: 'smooth' }), 50);
+        // A wrong tone changes the word for a native listener, so it never passes as "close enough".
+        const toneErr = !!dv && dd.syl.some(s => s.kind === 'tone');
+        if (r.best >= 0.5 && !toneErr) {
+          if (dv) status.replaceChildren('ผ่าน แต่ยังมีจุดที่ควรแก้ 👇');
+          return done('auto', r);
+        }
+        sfx('bad');
+        if (toneErr && !r.toneTrap) {
+          status.replaceChildren(h('b', { class: 'bad-t' }, '✕ วรรณยุกต์ผิด: '), 'ระบบได้ยิน ', h('b', { lang: 'zh-CN' }, r.heard), ' — ดูจุดที่ผิดด้านล่าง');
+        } else if (r.toneTrap) {
           const info = lookupHanzi(r.toneTrap);
-          status.replaceChildren(h('b', { class: 'bad-t' }, 'วรรณยุกต์ผิด: '), 'ระบบได้ยิน ', h('b', { lang: 'zh-CN' }, r.toneTrap),
-            info ? [' ', pyEl(info.pinyin), ` (${info.meaning})`] : null, ' — ฟังต้นแบบแล้วลองใหม่');
-        } else status.replaceChildren('ระบบได้ยิน: ', h('b', { lang: 'zh-CN' }, r.heard || '(ไม่ชัด)'), ' — ลองอีกครั้ง');
+          status.replaceChildren(h('b', { class: 'bad-t' }, '✕ วรรณยุกต์ผิด: '), 'ระบบได้ยิน ', h('b', { lang: 'zh-CN' }, r.toneTrap),
+            info ? [' ', pyEl(info.pinyin), ` (${info.meaning})`] : null, ' — คนจีนจะเข้าใจเป็นอีกคำ');
+        } else status.replaceChildren(h('b', { class: 'bad-t' }, '✕ ยังไม่ตรง: '), 'ระบบได้ยิน ', h('b', { lang: 'zh-CN' }, r.heard || '(ไม่ชัด)'),
+          dv ? ' — ดูจุดที่ผิดด้านล่าง' : ' — ฟังต้นแบบแล้วลองอีกครั้ง');
         if (attempts === 3) offerSelf();
       } catch (err) {
         mic.classList.remove('on');
@@ -1813,7 +1966,7 @@ function exSpeak(ex) {
   lvl === 'A' ? renderA() : lvl === 'B' ? renderB() : renderC();
   setFoot(footBtn('ข้ามข้อนี้', () => done('skip'), 'btn-ghost'));
   setTimeout(() => play(it), 250);
-  return h('div', { class: 'ex' }, prompt('พูดตาม'), wordCard(it), playBtns(it), box, status,
+  return h('div', { class: 'ex' }, prompt('พูดตาม'), wordCard(it), playBtns(it), box, status, diffBox,
     h('button', { class: 'link', onclick: snoozeMic }, 'ตอนนี้พูดไม่ได้ (พัก 15 นาที)'));
 }
 
@@ -1844,6 +1997,15 @@ function pitchPlot(r) {
   return cv;
 }
 
+// Describes the user's own pitch curve (5 points, semitones around their voice centre) in plain words.
+function contourText(c) {
+  if (!c || c.length < 5) return 'เสียงคุณ';
+  const rise = c[4] - c[0], dip = Math.min(...c) - Math.max(c[0], c[4]), lvl = mean(c);
+  const shape = dip < -2 ? 'กดลงแล้วขึ้น' : rise > 2.5 ? 'ไล่ขึ้น' : rise < -2.5 ? 'ตกลง' : 'ค่อนข้างราบ';
+  const height = lvl > 1.5 ? 'ช่วงสูง' : lvl < -1.5 ? 'ช่วงต่ำ' : 'ช่วงกลาง';
+  return `เสียงคุณ${shape} ${height}`;
+}
+
 function exToneSpeak(ex) {
   const t = ex.target;
   const box = h('div', { class: 'speak-box' });
@@ -1869,7 +2031,8 @@ function exToneSpeak(ex) {
     res.replaceChildren(pitchPlot(r),
       h('div', { class: 'syl-row' }, ...r.syl.map((s, i) => h('div', { class: 'syl ' + (s.ok ? 'ok' : 'no') },
         h('b', {}, sp[i] ? sp[i].text : ''), h('small', {}, s.target === 5 ? 'เสียงเบา' : s.ok ? '✓ ถูก' : `คล้าย${TONE_NAME[s.got]}`)))),
-      ...r.syl.filter(s => !s.ok).map(s => h('p', { class: 'hint' }, '💡 ' + TONE_HINT[s.target])),
+      ...r.syl.map((s, i) => s.ok || s.target === 5 ? null : h('p', { class: 'hint' }, h('b', {}, pyEl(sp[i] ? sp[i].text : '')),
+        ` — ต้องเป็น ${TONE_NAME[s.target]} แต่${contourText(s.curve)} จึงฟังเป็น${TONE_NAME[s.got]}`, h('br'), '💡 ' + TONE_HINT[s.target])),
       h('p', { class: 'muted small' }, 'เส้นประ = เป้าหมาย · เส้นทึบ = เสียงคุณ'));
     status.textContent = r.ok ? 'วรรณยุกต์ถูกต้อง! 🎉' : 'ยังไม่ตรง ลองอีกครั้งได้';
     if (r.ok && !passed) { passed = true; sfx('ok'); L.xp += 3; addXp(3); setFoot(footBtn('ต่อไป', advance, 'btn-jade')); }
