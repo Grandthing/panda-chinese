@@ -1,6 +1,6 @@
 // Service worker: app shell cache-first, lesson content network-first (so new lessons arrive without a version bump).
 // Bump VERSION whenever index.html / app.js / style.css / icons change.
-const VERSION = 'v1.4.1';
+const VERSION = 'v1.5.0';
 const CACHE = 'panda-talk-' + VERSION;
 const SHELL = [
   './',

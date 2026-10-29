@@ -79,7 +79,7 @@ function defaultState() {
     createdAt: new Date().toISOString(),
     onboarded: false,
     settings: {
-      dailyGoalXp: 60, ttsRate: 0.9, voiceURI: null, showThai: true, showHanzi: true, sfx: true,
+      dailyGoalXp: 60, ttsRate: 0.9, voiceURI: null, randomVoice: true, showThai: true, showHanzi: true, sfx: true,
       micMode: 'auto', micSnoozeUntil: null, unlimitedHearts: false,
     },
     lessons: {},
@@ -127,7 +127,7 @@ addEventListener('pagehide', () => { saveNow(); Log.flush(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) { saveNow(); Log.flush(); } });
 
 // ============================================================ Debug log (ring buffer, kept across sessions → LINE / file)
-const APP_VERSION = '1.4.1';
+const APP_VERSION = '1.5.0';
 const LOG_KEY = 'pandaTalk.log';
 const LOG_MAX = 400;
 const safeJson = v => { try { return JSON.stringify(v); } catch { return String(v); } };
@@ -314,6 +314,16 @@ const TTS = {
     const pref = S.settings.voiceURI && this.voices.find(v => v.voiceURI === S.settings.voiceURI);
     this.voice = pref || this.voices.find(v => v.localService) || this.voices[0] || null;
   },
+  // A different "speaker" per exercise: another installed voice when Safari lists more than one,
+  // and always a different pitch, so even a single voice (iOS often exposes only Tingting) varies.
+  persona: null,
+  shuffle() {
+    if (!S.settings.randomVoice) { this.persona = null; return; }
+    const pool = S.settings.voiceURI === 'system' ? [] : this.voices.filter(v => v.localService);
+    const voice = pool.length > 1 ? pool[Math.floor(Math.random() * pool.length)] : this.voice;
+    const pitches = [1, 1.15, 0.85, 1.3, 0.75].filter(p => !this.persona || p !== this.persona.pitch);
+    this.persona = { voice, pitch: pitches[Math.floor(Math.random() * pitches.length)] };
+  },
   unlock() {
     if (!this.supported || this.unlocked) return;
     const u = new SpeechSynthesisUtterance(' ');
@@ -328,7 +338,10 @@ const TTS = {
       if (speechSynthesis.speaking || speechSynthesis.pending) speechSynthesis.cancel();
       const u = new SpeechSynthesisUtterance(text);
       u.lang = 'zh-CN';
-      if (this.voice) u.voice = this.voice;
+      const p = this.persona;
+      const voice = p ? p.voice : this.voice;
+      if (voice) u.voice = voice;
+      if (p) u.pitch = p.pitch;
       u.rate = rate || S.settings.ttsRate;
       let done = false;
       const fin = () => { if (!done) { done = true; resolve(); } };
@@ -1299,6 +1312,12 @@ function renderSettings() {
     h('section', { class: 'card-box' }, h('h3', {}, 'เสียงจีน (TTS)'),
       voiceNow, voiceList,
       h('label', { class: 'row' }, h('span', {}, 'ความเร็ว'), rate),
+      toggle('randomVoice', 'สุ่มเสียงแต่ละข้อ (เสียงสูง/ต่ำต่างกัน)'),
+      h('button', { class: 'btn btn-ghost', onclick: async () => {
+        const keep = TTS.persona;
+        for (let k = 0; k < 3; k++) { TTS.shuffle(); await TTS.speak('你好'); if (!S.settings.randomVoice) break; }
+        TTS.persona = keep;
+      } }, '🎲 ฟังตัวอย่างเสียงสุ่ม'),
       h('details', { class: 'howto', open: !TTS.voices.length || noBetter },
         h('summary', {}, '📥 โหลดเสียงจีนเพิ่ม (ฟรี)'),
         h('ol', {},
@@ -1607,6 +1626,7 @@ async function askQuit() {
 function endSession() {
   if (L) logI('lesson', `end ${L.mode} at ${L.i}/${L.queue.length}`);
   L = null;
+  TTS.persona = null;
   if (TTS.supported) speechSynthesis.cancel();
   const el = lessonEl();
   el.hidden = true; el.replaceChildren();
@@ -1628,6 +1648,7 @@ function footBtn(label, onclick, cls = 'btn-primary', disabled = false) {
 function renderExercise() {
   updateHead();
   const ex = L.queue[L.i];
+  TTS.shuffle();
   const body = $('#l-body');
   body.scrollTop = 0;
   logI('ex', `${L.i + 1}/${L.queue.length} ${ex.type}${ex.retry ? '(ซ่อม)' : ''} ${(ex.item && ex.item.id) || (ex.set && ex.set.id) || (ex.dialog && ex.dialog.id) || (ex.target && ex.target.pinyin) || ''}`);
