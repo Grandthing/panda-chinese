@@ -128,7 +128,7 @@ addEventListener('pagehide', () => { saveNow(); Log.flush(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) { saveNow(); Log.flush(); } });
 
 // ============================================================ Debug log (ring buffer, kept across sessions → LINE / file)
-const APP_VERSION = '1.7.0';
+const APP_VERSION = '1.8.0';
 const LOG_KEY = 'pandaTalk.log';
 const LOG_MAX = 400;
 const safeJson = v => { try { return JSON.stringify(v); } catch { return String(v); } };
@@ -922,6 +922,8 @@ function nodeState(e) {
   if (e.index === u) return 'current';
   return e.index < u ? 'open' : 'locked';
 }
+// A finished lesson whose newItems were extended after it was played.
+const hasUnseen = e => e.kind === 'lesson' && isDone(e.id) && (e.lesson.newItems || []).some(id => !S.srs[id]);
 const courseDone = () => C.order.length > 0 && C.order.every(e => isBonus(e) || isDone(e.id));
 
 // ============================================================ Engine: build exercises
@@ -1052,9 +1054,9 @@ function buildSession(mode, entry) {
     const its = items(ids);
     for (const it of pick(its, 10)) q.push(it.listenOnly || rand() < 0.5 ? mkListen(it, ids) : mkMeaning(it, ids));
   } else if (mode === 'listen') {
-    // Ear training: everything learned plus every "what locals say back" phrase, each heard in a random voice.
-    const ids = uniq(learnedIds().concat(Object.keys(C.items).filter(id => C.items[id].listenOnly)));
-    for (const it of pick(items(ids), 12)) q.push(mkListen(it, ids));
+    // Ear training on words already met in lessons (hearing unknown phrases teaches nothing), random voice each.
+    const ids = learnedIds(), list = shuffle(items(ids));
+    for (let k = 0; k < 12 && list.length; k++) q.push(mkListen(list[k % list.length], ids));
   } else if (mode === 'tone') {
     const speakable = items(learnedIds()).filter(toneSpeakable);
     for (let k = 0; k < 10; k++) {
@@ -1259,10 +1261,12 @@ function renderLearn() {
   if (isIOS && !isStandalone() && S.onboarded) wrap.append(h('button', { class: 'warn', onclick: installGuideSheet }, '📲 เพิ่มลงหน้าจอโฮม เพื่อไม่ให้ความคืบหน้าหาย — แตะดูวิธี'));
   if (S.lastExportDate === null ? Object.keys(S.lessons).length >= 6 : dayDiff(S.lastExportDate, today()) >= 5)
     wrap.append(h('button', { class: 'warn soft', onclick: exportProgress }, '💾 สำรองความคืบหน้า (แนะนำทุก 5 วัน) — แตะเพื่อบันทึกไฟล์'));
+  if (Object.keys(S.lessons).length < 9) // first days only; afterwards it lives on the Me tab
+    wrap.append(h('button', { class: 'warn soft', onclick: () => { location.hash = '#/guide'; } }, '📖 วิธีเรียนให้ได้ผล — อ่านก่อนเริ่ม (1 นาที)'));
   const bonus = C.order.filter(isBonus);
   if (bonus.length && !bonus.every(e => isDone(e.id)))
     wrap.append(h('button', { class: 'warn soft', onclick: () => document.getElementById('bonus-stage')?.scrollIntoView({ behavior: 'smooth', block: 'start' }) },
-      '🐼 บทพิเศษเฉิงตู + ฝึกฟัง เปิดให้เรียนได้เลย — แตะเพื่อไปที่บท'));
+      '🐼 บทพิเศษเที่ยวเฉิงตู เปิดให้เรียนได้เลย — แตะเพื่อไปที่บท'));
   let lastStage = null;
   let currentEl = null;
   for (const u of C.units) {
@@ -1276,7 +1280,7 @@ function renderLearn() {
       const rec = S.lessons[e.id];
       const ic = e.kind === 'checkpoint' ? '👑' : st === 'locked' ? '🔒' : st === 'done' ? '✓' : '▶';
       const node = h('div', { class: 'node-wrap', style: `transform:translateX(${off}px)` },
-        st === 'current' ? h('div', { class: 'node-tip' }, 'เริ่มตรงนี้') : null,
+        st === 'current' ? h('div', { class: 'node-tip' }, 'เริ่มตรงนี้') : hasUnseen(e) ? h('div', { class: 'node-tip new' }, '🆕 มีคำเพิ่ม') : null,
         h('button', { class: `node ${st} ${e.kind}`, 'aria-label': `${e.title} (${{ done: 'จบแล้ว', current: 'บทถัดไป', open: 'เปิดแล้ว', locked: 'ล็อค' }[st]})`, onclick: () => openNode(e) }, ic),
         rec && !rec.skipped ? h('div', { class: 'stars' }, '★'.repeat(rec.stars) + '☆'.repeat(3 - rec.stars)) : null);
       if (st === 'current' && !isBonus(e)) currentEl = node;
@@ -1368,8 +1372,8 @@ function renderReview() {
       h('button', { class: 'btn btn-primary', disabled: learned.length < 3, onclick: () => startSession('review') }, learned.length < 3 ? 'เรียนบทแรกก่อน' : 'เริ่มทบทวน')),
     h('section', { class: 'card-box' },
       h('h3', {}, '👂 ฝึกฟังคนจีนพูด'),
-      h('p', { class: 'muted' }, 'ฟัง 12 ข้อ ทั้งคำที่เรียนแล้วและประโยคที่คนจีนมักพูดกับคุณ สุ่มเสียงคนพูดทุกข้อ · ไม่เสียหัวใจ · จบได้ +1 ❤️'),
-      h('button', { class: 'btn btn-jade', onclick: () => startSession('listen') }, '🎧 เริ่มฝึกฟัง')),
+      h('p', { class: 'muted' }, 'ฟัง 12 ข้อจากคำที่เรียนไปแล้ว สุ่มเสียงคนพูดทุกข้อ · ไม่เสียหัวใจ · จบได้ +1 ❤️'),
+      h('button', { class: 'btn btn-jade', disabled: learned.length < 4, onclick: () => startSession('listen') }, learned.length < 4 ? 'เรียนบทแรกก่อน' : '🎧 เริ่มฝึกฟัง')),
     h('section', { class: 'card-box' },
       h('h3', {}, '🎵 ห้องฝึกวรรณยุกต์'),
       h('p', { class: 'muted' }, Speech.toneAvailable() ? 'ฟังแยกเสียง + พูดแล้วดูเส้นเสียงของคุณเทียบกับเป้าหมาย (ทดลอง)' : 'ฝึกฟังแยกวรรณยุกต์ (เปิดสิทธิ์ไมค์เพื่อฝึกพูดด้วย)'),
@@ -1545,6 +1549,7 @@ function renderSettings() {
       h('p', { class: 'muted' }, `แอปเก็บ log การใช้งานล่าสุดไว้ในเครื่อง (${Log.items.length} บรรทัด · ข้อผิดพลาด ${Log.errors()} ครั้ง)`),
       h('button', { class: 'btn btn-line', onclick: reportSheet }, '💬 รายงานปัญหา / ส่ง log ทาง LINE')),
     h('section', { class: 'card-box' },
+      h('button', { class: 'btn btn-ghost', onclick: () => { location.hash = '#/guide'; } }, '📖 วิธีเรียนให้ได้ผล'),
       h('button', { class: 'btn btn-ghost', onclick: () => { location.hash = '#/help'; } }, '❓ ช่วยเหลือ: เสียง & ไมค์'),
       h('button', { class: 'btn btn-danger-ghost', onclick: resetAll }, '🗑️ ล้างความคืบหน้าทั้งหมด')),
     h('p', { class: 'muted center' }, `แอป ${APP_VERSION} · เนื้อหา ${C.version} · ${Object.values(C.items).filter(i => !i.npc).length} วลี`)));
@@ -1564,6 +1569,45 @@ async function testMic(out) {
     out.textContent = peak > 0.02 ? '✅ ไมค์ใช้ได้ (กำลังเล่นเสียงที่อัด)' : '⚠️ เสียงเบามาก ลองพูดใกล้ไมค์';
     playClip(clip);
   } catch { out.textContent = '❌ ไม่ได้รับสิทธิ์ใช้ไมค์ — เปิดได้ที่ ตั้งค่า iPhone → Safari → ไมโครโฟน'; }
+}
+
+function renderGuide() {
+  const sec = (title, ...kids) => h('section', { class: 'card-box guide' }, h('h3', {}, title), ...kids);
+  const ol = (...li) => h('ol', {}, ...li.map(x => h('li', {}, x)));
+  const ul = (...li) => h('ul', {}, ...li.map(x => h('li', {}, x)));
+  screen().replaceChildren(h('div', { class: 'help' },
+    h('div', { class: 'back-row' }, h('button', { class: 'icon-btn', 'aria-label': 'กลับ', onclick: () => history.back() }, '←'), h('h2', { class: 'page-title' }, 'วิธีเรียน')),
+    pandaSay('hi', 'วันละ 15–20 นาที = 1 วันบนแผนที่ (3 บท + ด่าน 👑) ครบ 20 วันพูดเอาตัวรอดได้'),
+    sec('1️⃣ ในแต่ละบท ทำแบบนี้',
+      ol(
+        [h('b', {}, 'คำใหม่ ✨: '), 'ฟัง 2–3 รอบ กด 🐢 ฟังช้า ดูคำอ่านไทย แล้ว', h('b', {}, 'พูดตามดัง ๆ'), ' ทุกครั้ง (ถึงจะไม่ใช่ข้อพูดก็ตาม)'],
+        [h('b', {}, 'ป้าย 👂: '), 'ประโยคที่คนจีนจะพูดกับคุณ เช่น "เอาถุงไหม" "เลี้ยวซ้าย" — แค่ฟังให้ออก ไม่ต้องพูด'],
+        [h('b', {}, 'ข้อฟัง 🔊: '), 'ฟังให้จบแล้วนึกความหมายในใจก่อน ค่อยดูตัวเลือก ฟังซ้ำได้ไม่จำกัด เสียงคนพูดเปลี่ยนทุกข้อเพื่อให้หูชินหลายเสียง'],
+        [h('b', {}, 'ข้อพูด 🎙️: '), 'พูดชัด ๆ ถ้าผิด แอปจะบอกว่าพยางค์ไหนผิดอะไร แตะพยางค์นั้นฟัง แล้วพูดใหม่'],
+        [h('b', {}, 'บทสนทนา 💬: '), 'คิดว่าอยู่ในร้านจริง พูดคำตอบออกเสียงก่อนกดเลือก'])),
+    sec('2️⃣ ทุกวัน 5 นาที (แท็บทบทวน)',
+      ul(
+        [h('b', {}, '🔁 ทบทวน'), ' — แอปเลือกคำที่ใกล้ลืมให้เอง'],
+        [h('b', {}, '🎧 ฝึกฟัง'), ' — 12 ข้อจากคำที่เรียนแล้ว เปิดฟังตอนเดินทาง/ก่อนนอนได้'],
+        [h('b', {}, '🎵 วรรณยุกต์'), ' — รอบสั้น ๆ วันละครั้ง เสียงผิดคนจีนจะฟังเป็นคำอื่น']),
+      h('p', { class: 'muted small' }, 'ทบทวนและฝึกฟังไม่เสียหัวใจ จบรอบได้หัวใจคืน +1')),
+    sec('3️⃣ แผนถึงวันเดินทาง',
+      ul(
+        'วันที่ 1–20 ตามแผนที่ วันละ 1 วัน (เรียนเร็วกว่านี้ได้ถ้ามีเวลา)',
+        'บทพิเศษเฉิงตู 🐼 เรียนได้ตลอด แนะนำช่วงสัปดาห์สุดท้ายก่อนบิน',
+        'บทไหนขึ้น 🆕 มีคำเพิ่ม = มีคำใหม่ถูกเพิ่มหลังคุณเรียนไปแล้ว แตะเล่นซ้ำอีกรอบ',
+        'ถ้าเวลาไม่พอ เน้นแท็บการ์ดพูด → ⭐ เอาตัวรอด')),
+    sec('4️⃣ ก่อนบิน (ทำตอนมี Wi-Fi)',
+      ol(
+        'ตั้งค่า → 📥 โหลดเสียงทั้งหมดไว้ใช้ออฟไลน์',
+        'การ์ดพูด → 📍 ใส่ที่อยู่โรงแรมเป็นภาษาจีน',
+        'ฉัน → 💾 สำรองความคืบหน้า')),
+    sec('5️⃣ ตอนอยู่จีน',
+      ul(
+        [h('b', {}, 'พูดไม่ออก: '), 'การ์ดพูด → ค้นคำ → แตะเพื่อโชว์ตัวจีนใหญ่ หรือกด 🔊 ให้เขาฟัง'],
+        [h('b', {}, 'ฟังไม่ทัน: '), 'พูด qǐng zài shuō yí biàn (พูดอีกครั้ง) หรือ màn yìdiǎn (ช้าหน่อย)'],
+        [h('b', {}, 'ขึ้นแท็กซี่: '), 'การ์ดพูด → 📍 แตะชื่อที่จะไป ยื่นให้คนขับดู'])),
+    h('button', { class: 'btn btn-primary', onclick: () => { location.hash = '#/learn'; } }, 'ไปเรียนกันเลย 🐼')));
 }
 
 function renderHelp() {
@@ -2371,10 +2415,10 @@ function renderNav(active) {
 function render() {
   if (!S.onboarded) return renderOnboarding(0);
   const r = route();
-  const views = { learn: renderLearn, phrases: renderPhrases, review: renderReview, me: renderMe, settings: renderSettings, help: renderHelp };
+  const views = { learn: renderLearn, phrases: renderPhrases, review: renderReview, me: renderMe, settings: renderSettings, help: renderHelp, guide: renderGuide };
   const view = views[r] || renderLearn;
   logI('nav', r);
-  renderNav(['settings', 'help'].includes(r) ? 'me' : (views[r] ? r : 'learn'));
+  renderNav(['settings', 'help', 'guide'].includes(r) ? 'me' : (views[r] ? r : 'learn'));
   view();
 }
 addEventListener('hashchange', () => {

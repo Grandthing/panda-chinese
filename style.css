@@ -485,3 +485,6 @@ input, textarea, select { -webkit-user-select: text; user-select: text; -webkit-
 .info-sheet textarea.search { resize: vertical; }
 .places .phrase { margin-bottom: 8px; }
 .card-hanzi { word-break: break-all; }
+.guide ol, .guide ul { margin: 6px 0; padding-left: 22px; line-height: 1.6; }
+.guide li { margin-bottom: 6px; }
+.node-tip.new { background: var(--jade); border-color: var(--jade-d); color: #fff; }
