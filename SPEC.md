@@ -487,6 +487,7 @@ key เดียว: `pandaTalk.v1` (JSON) — เขียนแบบ debounce
 | PWA ออฟไลน์ + ติดตั้ง | แพลตฟอร์ม | must | |
 | export/import progress | ข้อมูล | must | ป้องกันข้อมูลหาย |
 | content lint (`?lint`) | เครื่องมือ | should | |
+| log การใช้งาน + ปุ่มส่ง log ทาง LINE / แชร์ไฟล์ / คัดลอก | เครื่องมือ | must | ring buffer 400 บรรทัดใน localStorage (`pandaTalk.log`) จับ error อัตโนมัติ |
 | โหมดมืด | UI | could | |
 | ใบประกาศจบ | เกม | could | |
 | เสียงคนจริง (`audio`) | เสียง | could | รองรับ schema ตั้งแต่แรก แต่ยังไม่อัด |

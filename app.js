@@ -121,10 +121,49 @@ function saveNow() {
   clearTimeout(saveTimer);
   if (!storageOK) return;
   try { localStorage.setItem(STORE_KEY, JSON.stringify(S)); }
-  catch { storageOK = false; toast('บันทึกความคืบหน้าไม่ได้ (พื้นที่เต็มหรือถูกปิด)'); }
+  catch (e) { storageOK = false; logE('storage', errText(e)); toast('บันทึกความคืบหน้าไม่ได้ (พื้นที่เต็มหรือถูกปิด)'); }
 }
-addEventListener('pagehide', saveNow);
-document.addEventListener('visibilitychange', () => { if (document.hidden) saveNow(); });
+addEventListener('pagehide', () => { saveNow(); Log.flush(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden) { saveNow(); Log.flush(); } });
+
+// ============================================================ Debug log (ring buffer, kept across sessions → LINE / file)
+const APP_VERSION = '1.1.0';
+const LOG_KEY = 'pandaTalk.log';
+const LOG_MAX = 400;
+const safeJson = v => { try { return JSON.stringify(v); } catch { return String(v); } };
+const Log = {
+  items: [], timer: 0,
+  load() { try { this.items = JSON.parse(localStorage.getItem(LOG_KEY) || '[]'); } catch { this.items = []; } },
+  add(l, g, msg) {
+    let m = typeof msg === 'string' ? msg : safeJson(msg);
+    if (m.length > 600) m = m.slice(0, 600) + '…';
+    this.items.push({ t: Date.now(), l, g, m });
+    if (this.items.length > LOG_MAX) this.items.splice(0, this.items.length - LOG_MAX);
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => this.flush(), 1000);
+  },
+  flush() { clearTimeout(this.timer); if (!storageOK) return; try { localStorage.setItem(LOG_KEY, JSON.stringify(this.items)); } catch {} },
+  clear() { this.items = []; this.flush(); },
+  errors() { return this.items.filter(e => e.l === 'E').length; },
+};
+if (storageOK) Log.load();
+const logI = (g, m) => Log.add('I', g, m);
+const logW = (g, m) => Log.add('W', g, m);
+const logE = (g, m) => Log.add('E', g, m);
+const errText = e => (e && (e.name ? e.name + ': ' : '') + (e.message || '')) || String(e);
+
+let lastErrToast = 0;
+function onAppError(msg) {
+  logE('error', msg);
+  if (Date.now() - lastErrToast > 30000) { lastErrToast = Date.now(); toast('เกิดข้อผิดพลาด 🐞', 0, { label: 'ส่ง log', fn: reportSheet }); }
+}
+addEventListener('error', e => onAppError(`${e.message} @${(e.filename || '').split('/').pop()}:${e.lineno}:${e.colno}` +
+  (e.error && e.error.stack ? '\n' + e.error.stack.split('\n').slice(0, 4).join('\n') : '')));
+addEventListener('unhandledrejection', e => onAppError('promise: ' + ((e.reason && (e.reason.stack || e.reason.message)) || e.reason)));
+for (const [k, l] of [['error', 'E'], ['warn', 'W']]) {
+  const orig = console[k].bind(console);
+  console[k] = (...a) => { Log.add(l, 'console', a.map(x => x instanceof Error ? x.stack || x.message : typeof x === 'string' ? x : safeJson(x)).join(' ')); orig(...a); };
+}
 
 // ============================================================ Content
 const C = { items: {}, cats: {}, units: [], order: [], byId: {}, toneSets: [], itemUnit: {}, version: '' };
@@ -251,8 +290,10 @@ const TTS = {
   init() {
     if (!this.supported) return;
     const load = () => {
+      const n = this.voices.length;
       this.voices = speechSynthesis.getVoices().filter(v => /^(zh[-_](cn|hans)|cmn)/i.test(v.lang));
       this.pick();
+      if (this.voices.length !== n) logI('tts', `เสียงจีน ${this.voices.length}: ${this.voices.map(v => v.name + (v.localService ? '' : '(net)')).join(', ')} → ใช้ ${this.voice ? this.voice.name : '-'}`);
     };
     load();
     speechSynthesis.addEventListener ? speechSynthesis.addEventListener('voiceschanged', load) : (speechSynthesis.onvoiceschanged = load);
@@ -281,7 +322,8 @@ const TTS = {
       u.rate = rate || S.settings.ttsRate;
       let done = false;
       const fin = () => { if (!done) { done = true; resolve(); } };
-      u.onend = fin; u.onerror = fin;
+      u.onend = fin;
+      u.onerror = e => { if (e.error !== 'interrupted' && e.error !== 'canceled') logW('tts', `speak "${text}" error ${e.error}`); fin(); };
       setTimeout(fin, 2500 + text.length * 600);
       speechSynthesis.speak(u);
     });
@@ -383,6 +425,7 @@ function startRecording(maxMs, onLevel) {
       stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: false } });
     } catch (e) {
       if (e && (e.name === 'NotAllowedError' || e.name === 'SecurityError')) Speech.micDenied = true;
+      logW('mic', 'getUserMedia ' + errText(e));
       throw e;
     }
     const src = ctx.createMediaStreamSource(stream);
@@ -560,6 +603,7 @@ function calibrateFrom(clip) {
   const f0s = A.frames.map(f => f.f0).filter(Boolean);
   if (f0s.length < 30) return null;
   S.pitchProfile = { medianHz: Math.round(median(f0s)), rangeSt: 10, samples: f0s.length };
+  logI('tone', `calibrate ${S.pitchProfile.medianHz}Hz (${f0s.length} frames)`);
   save();
   return S.pitchProfile;
 }
@@ -1065,7 +1109,8 @@ function renderMe() {
         return h('div', { class: 'day' + (d === today() ? ' today' : '') }, h('div', { class: 'col' }, h('i', { style: `height:${v / maxXp * 100}%` })), h('small', {}, wd[new Date(y, m - 1, dd).getDay()]));
       }))),
     h('section', { class: 'card-box' }, h('h3', {}, 'ความแม่นวรรณยุกต์ (จากข้อพูด)'), toneStatBars()),
-    h('button', { class: 'btn btn-ghost', onclick: () => { location.hash = '#/settings'; } }, '⚙️ ตั้งค่า & สำรองข้อมูล')));
+    h('button', { class: 'btn btn-ghost', onclick: () => { location.hash = '#/settings'; } }, '⚙️ ตั้งค่า & สำรองข้อมูล'),
+    h('button', { class: 'btn btn-ghost', onclick: reportSheet }, '🐞 รายงานปัญหา / ส่ง log')));
 }
 const statCard = (ic, v, label) => h('div', { class: 'stat-card' }, h('div', { class: 'sc-ic' }, ic), h('b', {}, v), h('small', {}, label));
 
@@ -1110,10 +1155,13 @@ function renderSettings() {
       h('button', { class: 'btn btn-jade', onclick: exportProgress }, '💾 บันทึกไฟล์สำรอง'),
       h('button', { class: 'btn btn-ghost', onclick: () => file.click() }, '📂 นำเข้าไฟล์สำรอง'), file,
       isIOS && !isStandalone() ? h('button', { class: 'btn btn-ghost', onclick: installGuideSheet }, '📲 วิธีเพิ่มลงหน้าจอโฮม') : null),
+    h('section', { class: 'card-box' }, h('h3', {}, '🐞 เจอบั๊ก?'),
+      h('p', { class: 'muted' }, `แอปเก็บ log การใช้งานล่าสุดไว้ในเครื่อง (${Log.items.length} บรรทัด · ข้อผิดพลาด ${Log.errors()} ครั้ง)`),
+      h('button', { class: 'btn btn-line', onclick: reportSheet }, '💬 รายงานปัญหา / ส่ง log ทาง LINE')),
     h('section', { class: 'card-box' },
       h('button', { class: 'btn btn-ghost', onclick: () => { location.hash = '#/help'; } }, '❓ ช่วยเหลือ: เสียง & ไมค์'),
       h('button', { class: 'btn btn-danger-ghost', onclick: resetAll }, '🗑️ ล้างความคืบหน้าทั้งหมด')),
-    h('p', { class: 'muted center' }, `เนื้อหา ${C.version} · ${Object.values(C.items).filter(i => !i.npc).length} วลี`)));
+    h('p', { class: 'muted center' }, `แอป ${APP_VERSION} · เนื้อหา ${C.version} · ${Object.values(C.items).filter(i => !i.npc).length} วลี`)));
 }
 
 async function testMic(out) {
@@ -1146,7 +1194,9 @@ function renderHelp() {
     sec('🎵 ตรวจวรรณยุกต์ (ทดลอง)', 'ทำงานบนเครื่องล้วน ไม่ส่งเสียงไปไหน วัดเส้นเสียงสูง-ต่ำของคุณเทียบกับรูปแบบวรรณยุกต์ 4 เสียง',
       'แม่นสุดเมื่อพูดคำ 1–2 พยางค์ในที่เงียบ ถ้าผลดูแปลก ให้ฟังเสียงตัวเองเทียบกับต้นแบบ และลองปรับเสียงใหม่ในหน้าตั้งค่า'),
     sec('❤️ หัวใจ', 'ตอบผิดในบทเรียนใหม่เสีย 1 ดวง ฟื้นเอง 1 ดวงทุก 30 นาที ทบทวนจบ 1 บทได้ +1 ครบเป้า XP วันนี้ได้เต็ม 5 ดวง ข้อพูดไม่หักหัวใจ'),
-    sec('ℹ️ คำอ่านไทย', 'คำอ่านไทยเป็นตัวช่วยโดยประมาณ ฟังเสียงจริงเป็นหลัก — เสียง 1 ≈ สามัญ (สูงกว่า), เสียง 2 ≈ จัตวา, เสียง 3 ≈ เอก, เสียง 4 ≈ โท')));
+    sec('ℹ️ คำอ่านไทย', 'คำอ่านไทยเป็นตัวช่วยโดยประมาณ ฟังเสียงจริงเป็นหลัก — เสียง 1 ≈ สามัญ (สูงกว่า), เสียง 2 ≈ จัตวา, เสียง 3 ≈ เอก, เสียง 4 ≈ โท'),
+    sec('🐞 เจอบั๊ก', 'แอปจดบันทึกการใช้งานล่าสุดไว้ในเครื่อง (log) กดปุ่มด้านล่าง เขียนสั้น ๆ ว่าเกิดอะไร แล้วส่งทาง LINE ได้เลย'),
+    h('button', { class: 'btn btn-line', onclick: reportSheet }, '💬 รายงานปัญหา / ส่ง log')));
 }
 
 function installGuideSheet() {
@@ -1188,6 +1238,74 @@ async function resetAll() {
   S = defaultState();
   location.hash = '#/learn';
   location.reload();
+}
+
+// Bug report: device summary + recent log, sent via LINE share URL (text) or the share sheet (full .txt file)
+let reportNote = '';
+function deviceInfo() {
+  return [
+    `แอป ${APP_VERSION} · เนื้อหา ${C.version} · ${new Date().toLocaleString('th-TH')}`,
+    navigator.userAgent,
+    `จอ ${window.screen.width}x${window.screen.height}@${devicePixelRatio} · ${isStandalone() ? 'ติดตั้งแล้ว' : 'แท็บเบราว์เซอร์'} · ${navigator.onLine ? 'ออนไลน์' : 'ออฟไลน์'} · SW ${navigator.serviceWorker && navigator.serviceWorker.controller ? 'ทำงาน' : 'ไม่ทำงาน'}`,
+    `เสียงจีน ${TTS.voices.length} (${TTS.voice ? TTS.voice.name : '-'}) · ตรวจคำ ${SR ? (Speech.srBroken ? 'พัง' : 'มี') : 'ไม่มี'} · ไมค์ ${Mic.supported() ? (Speech.micDenied ? 'ถูกปฏิเสธ' : 'ได้') : 'ไม่รองรับ'} · ระดับ ${Speech.level()} · โหมด ${S.settings.micMode}`,
+    `จบ ${Object.keys(S.lessons).length} บท · ถึง ${S.unlockedUpTo || '-'} · ${S.xp.total} XP · ❤️${S.hearts.count} · ปรับเสียง ${S.pitchProfile ? S.pitchProfile.medianHz + 'Hz' : '-'} · storage ${storageOK ? 'ok' : 'ปิด'}`,
+  ];
+}
+function logText(maxChars) {
+  const head = ['🐼 Panda log', ...deviceInfo()];
+  if (reportNote.trim()) head.push('ปัญหา: ' + reportNote.trim());
+  const ts = t => { const d = new Date(t); return `${z2(d.getMonth() + 1)}-${z2(d.getDate())} ${z2(d.getHours())}:${z2(d.getMinutes())}:${z2(d.getSeconds())}`; };
+  let lines = Log.items.map(e => `${ts(e.t)} ${e.l} [${e.g}] ${e.m}`);
+  if (maxChars) {
+    // Keep the newest lines that fit; errors are usually the most recent thing before a report.
+    let budget = maxChars - head.join('\n').length - 60;
+    const keep = [];
+    for (let i = lines.length - 1; i >= 0; i--) { budget -= lines[i].length + 1; if (budget < 0) break; keep.unshift(lines[i]); }
+    if (keep.length < lines.length) keep.unshift(`(ตัด ${lines.length - keep.length} บรรทัดเก่าออก — แชร์ไฟล์เพื่อดูทั้งหมด)`);
+    lines = keep;
+  }
+  return head.join('\n') + '\n----\n' + (lines.join('\n') || '(ยังไม่มี log)');
+}
+function sendToLine() {
+  logI('report', 'ส่งไป LINE');
+  // Thai text roughly triples once URL-encoded; keep the link a safe length for LINE.
+  const url = 'https://line.me/R/share?text=' + encodeURIComponent(logText(1800));
+  const a = h('a', { href: url, target: '_blank', rel: 'noopener' });
+  document.body.append(a); a.click(); a.remove();
+}
+async function shareLogFile() {
+  logI('report', 'แชร์ไฟล์ log');
+  const text = logText();
+  const name = `panda-log-${today()}.txt`;
+  try {
+    const file = new File([text], name, { type: 'text/plain' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: name }); return; }
+  } catch (e) { if (e && e.name === 'AbortError') return; }
+  const a = h('a', { href: URL.createObjectURL(new Blob([text], { type: 'text/plain' })), download: name });
+  document.body.append(a); a.click(); a.remove();
+  toast('บันทึกไฟล์ log แล้ว');
+}
+async function copyLog() {
+  const text = logText();
+  try { await navigator.clipboard.writeText(text); }
+  catch {
+    const ta = h('textarea', { style: 'position:fixed;opacity:0' });
+    ta.value = text; document.body.append(ta); ta.select();
+    try { document.execCommand('copy'); } catch {}
+    ta.remove();
+  }
+  toast('คัดลอก log แล้ว วางในแชทได้เลย');
+}
+function reportSheet() {
+  const ta = h('textarea', { class: 'note', rows: '3', placeholder: 'เล่าสั้น ๆ ว่าเกิดอะไรขึ้น เช่น "วันที่ 3 บทที่ 2 กดไมค์แล้วค้าง"', 'aria-label': 'อธิบายปัญหา' });
+  ta.value = reportNote;
+  ta.addEventListener('input', () => { reportNote = ta.value; });
+  const count = h('p', { class: 'muted small' }, `log ${Log.items.length} บรรทัด · ข้อผิดพลาด ${Log.errors()} ครั้ง · มีแค่รุ่นเครื่อง ผลการเรียน และคำที่ระบบได้ยิน ไม่มีข้อมูลส่วนตัว`);
+  openSheet(h('div', { class: 'info-sheet' }, h('h3', {}, '🐞 รายงานปัญหา'), ta, count,
+    h('button', { class: 'btn btn-line', onclick: sendToLine }, '💬 ส่งไป LINE'),
+    h('button', { class: 'btn btn-ghost', onclick: shareLogFile }, '📎 แชร์ไฟล์ log ทั้งหมด (เลือก LINE ได้)'),
+    h('button', { class: 'btn btn-ghost', onclick: copyLog }, '📋 คัดลอก log'),
+    h('button', { class: 'btn btn-danger-ghost', onclick: () => { Log.clear(); count.textContent = 'ล้าง log แล้ว'; } }, '🗑️ ล้าง log (หลังส่งแล้ว)')));
 }
 
 function certificateSheet() {
@@ -1257,6 +1375,7 @@ function startSession(mode, entry) {
   const sess = buildSession(mode, entry);
   if (!sess.queue.length) { toast('ยังไม่มีคำให้ฝึก เรียนบทแรกก่อนนะ'); return; }
   L = sess;
+  logI('lesson', `start ${mode} ${entry ? entry.id : ''} ❤️${heartsLabel()} [${sess.queue.map(q => q.type).join(',')}]`);
   TTS.unlock(); audioCtx();
   history.pushState({ lesson: true }, '', '#/lesson');
   const el = lessonEl();
@@ -1276,6 +1395,7 @@ async function askQuit() {
   if (await confirmBox('ออกจากบทเรียน?', 'ความคืบหน้าในบทนี้จะไม่ถูกบันทึก', 'ออก', 'เรียนต่อ', true)) endSession();
 }
 function endSession() {
+  if (L) logI('lesson', `end ${L.mode} at ${L.i}/${L.queue.length}`);
   L = null;
   if (TTS.supported) speechSynthesis.cancel();
   const el = lessonEl();
@@ -1300,6 +1420,7 @@ function renderExercise() {
   const ex = L.queue[L.i];
   const body = $('#l-body');
   body.scrollTop = 0;
+  logI('ex', `${L.i + 1}/${L.queue.length} ${ex.type}${ex.retry ? '(ซ่อม)' : ''} ${(ex.item && ex.item.id) || (ex.set && ex.set.id) || (ex.dialog && ex.dialog.id) || (ex.target && ex.target.pinyin) || ''}`);
   const R = { intro: exIntro, listen: exListen, meaning: exMeaning, build: exBuild, tone: exTone, speak: exSpeak, match: exMatch, dialog: exDialog, tone_speak: exToneSpeak }[ex.type];
   body.replaceChildren(R(ex));
 }
@@ -1314,6 +1435,7 @@ function advance() {
 // Record a graded answer; returns nothing. Handles XP, SRS, hearts, retry queue.
 function grade(ex, ok, srsIds) {
   const first = !ex.retry && L.results[ex.uid] === undefined;
+  logI('ans', `${ex.type} ${ok ? 'ถูก' : 'ผิด'}`);
   if (first) {
     L.results[ex.uid] = ok;
     (srsIds || []).forEach(id => srsUpdate(id, ok));
@@ -1556,6 +1678,7 @@ function exSpeak(ex) {
         mic.classList.remove('on');
         const r = scoreSpeech(it, alts);
         attempts++;
+        logI('sr', `${it.id} ได้ยิน [${alts.join(' / ')}] score=${r.best.toFixed(2)}${r.toneTrap ? ' trap=' + r.toneTrap : ''}`);
         if (r.best >= 0.5) return done('auto', r);
         if (r.toneTrap) {
           const info = lookupHanzi(r.toneTrap);
@@ -1565,6 +1688,7 @@ function exSpeak(ex) {
         if (attempts === 3) offerSelf();
       } catch (err) {
         mic.classList.remove('on');
+        logW('sr', `${it.id} error ${err}`);
         if (err === 'no-speech' || err === 'aborted') {
           attempts++;
           status.textContent = 'ไม่ได้ยินเสียง ลองพูดดังขึ้นอีกนิด';
@@ -1572,6 +1696,7 @@ function exSpeak(ex) {
           return;
         }
         Speech.srBroken = true;
+        logW('sr', 'ปิดระบบตรวจคำ → ระดับ ' + Speech.level());
         if (!Speech.notified) { Speech.notified = true; toast('ระบบตรวจคำพูดใช้ไม่ได้ตอนนี้ — เปลี่ยนเป็นอัดเสียงแล้วฟังเทียบเอง'); }
         Speech.level() === 'B' ? renderB() : renderC();
       }
@@ -1654,6 +1779,7 @@ function exToneSpeak(ex) {
   const meter = h('div', { class: 'meter' }, h('i'));
 
   const showResult = r => {
+    logI('tone', `${t.pinyin} → ${r.reason || r.syl.map(s => `${s.target}:${s.got}`).join(' ')}`);
     if (r.reason) {
       res.replaceChildren();
       status.textContent = r.reason === 'quiet' ? 'ไม่ได้ยินเสียงชัด ลองพูดดังขึ้นใกล้ไมค์' : `ลองพูดให้ได้ ${t.tones.length} พยางค์ชัด ๆ เว้นจังหวะนิดหนึ่ง`;
@@ -1738,6 +1864,7 @@ function finishSession() {
   if (goalHit) extra.push('ครบเป้าวันนี้! เติมหัวใจเต็ม ❤️×5');
   const streakUp = touchStreak();
   if (streakUp) extra.push(`🔥 สตรีค ${S.streak.current} วัน!`);
+  logI('lesson', `finish ${sess.mode} ${sess.entry ? sess.entry.id : ''} acc=${Math.round(acc * 100)}% xp=${sess.xp} ❤️lost=${sess.heartsLost}`);
   saveNow();
   sfx('done');
   const finalDone = sess.mode === 'checkpoint' && sess.entry.lesson.final;
@@ -1753,6 +1880,7 @@ function finishSession() {
 }
 
 function heartsOutInLesson() {
+  logI('lesson', `หัวใจหมด ${L.mode} at ${L.i}/${L.queue.length}`);
   $('#l-body').replaceChildren(h('div', { class: 'complete' }, panda('sleep', 140),
     h('h2', {}, 'หัวใจหมดแล้ว'),
     h('p', {}, 'บทนี้ยังไม่ถูกบันทึก แต่ XP ที่ได้ยังอยู่'),
@@ -1781,6 +1909,7 @@ function render() {
   const r = route();
   const views = { learn: renderLearn, phrases: renderPhrases, review: renderReview, me: renderMe, settings: renderSettings, help: renderHelp };
   const view = views[r] || renderLearn;
+  logI('nav', r);
   renderNav(['settings', 'help'].includes(r) ? 'me' : (views[r] ? r : 'learn'));
   view();
 }
@@ -1801,7 +1930,7 @@ function registerSW() {
       const w = reg.installing;
       w && w.addEventListener('statechange', () => { if (w.state === 'installed' && navigator.serviceWorker.controller) prompt(w); });
     });
-  }).catch(() => {});
+  }).catch(e => logW('sw', 'register ' + errText(e)));
   let reloaded = false;
   navigator.serviceWorker.addEventListener('controllerchange', () => { if (!reloaded) { reloaded = true; location.reload(); } });
 }
@@ -1810,7 +1939,8 @@ async function boot() {
   TTS.init();
   document.addEventListener('pointerdown', () => { TTS.unlock(); audioCtx(); }, { once: true });
   try { await loadContent(); }
-  catch {
+  catch (e) {
+    logE('boot', 'loadContent ' + errText(e));
     screen().replaceChildren(h('div', { class: 'onb' }, panda('sad', 120), h('h2', {}, 'โหลดบทเรียนไม่สำเร็จ'),
       h('p', {}, 'ตรวจการเชื่อมต่อแล้วลองใหม่ (ครั้งแรกต้องมีเน็ต หลังจากนั้นใช้ออฟไลน์ได้)'),
       h('button', { class: 'btn btn-primary', onclick: () => location.reload() }, 'ลองใหม่')));
@@ -1818,6 +1948,7 @@ async function boot() {
   }
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
   if (location.hash === '#/lesson') history.replaceState(null, '', '#/learn');
+  logI('boot', deviceInfo().join(' | '));
   render();
   if (params.has('lint')) {
     const issues = lintContent();

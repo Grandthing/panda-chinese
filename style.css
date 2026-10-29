@@ -106,6 +106,12 @@ button { cursor: pointer; }
 .btn-danger { background: var(--bad); color: #fff; box-shadow: 0 4px 0 var(--bad-d); }
 .btn-ghost { background: var(--surface); color: var(--text); border: 2px solid var(--line); box-shadow: var(--shadow); }
 .btn-danger-ghost { background: transparent; color: var(--bad); border: 2px solid var(--bad-tint); }
+/* LINE's own green, used only on the "send via LINE" button so people recognise where it goes */
+.btn-line { background: #06C755; color: #fff; box-shadow: 0 4px 0 #04A043; }
+.note {
+  width: 100%; margin: 8px 0 4px; padding: 10px 12px; resize: vertical;
+  border: 2px solid var(--line); border-radius: 14px; background: var(--surface); font-size: 16px;
+}
 .icon-btn {
   min-width: 44px; min-height: 44px; border: 0; border-radius: 12px;
   background: transparent; font-size: 22px; line-height: 1;
