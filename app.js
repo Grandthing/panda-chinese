@@ -79,7 +79,7 @@ function defaultState() {
     createdAt: new Date().toISOString(),
     onboarded: false,
     settings: {
-      dailyGoalXp: 60, ttsRate: 0.9, voiceURI: null, randomVoice: true, showThai: true, showHanzi: true, sfx: true,
+      dailyGoalXp: 60, ttsRate: 0.9, voiceURI: null, randomVoice: true, recordedAudio: true, recVoice: null, showThai: true, showHanzi: true, sfx: true,
       micMode: 'auto', micSnoozeUntil: null, unlimitedHearts: false,
     },
     lessons: {},
@@ -127,7 +127,7 @@ addEventListener('pagehide', () => { saveNow(); Log.flush(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) { saveNow(); Log.flush(); } });
 
 // ============================================================ Debug log (ring buffer, kept across sessions → LINE / file)
-const APP_VERSION = '1.5.0';
+const APP_VERSION = '1.6.0';
 const LOG_KEY = 'pandaTalk.log';
 const LOG_MAX = 400;
 const safeJson = v => { try { return JSON.stringify(v); } catch { return String(v); } };
@@ -322,7 +322,8 @@ const TTS = {
     const pool = S.settings.voiceURI === 'system' ? [] : this.voices.filter(v => v.localService);
     const voice = pool.length > 1 ? pool[Math.floor(Math.random() * pool.length)] : this.voice;
     const pitches = [1, 1.15, 0.85, 1.3, 0.75].filter(p => !this.persona || p !== this.persona.pitch);
-    this.persona = { voice, pitch: pitches[Math.floor(Math.random() * pitches.length)] };
+    const recs = Rec.voices().filter(v => !this.persona || v !== this.persona.rec);
+    this.persona = { voice, pitch: pitches[Math.floor(Math.random() * pitches.length)], rec: recs[Math.floor(Math.random() * recs.length)] };
   },
   unlock() {
     if (!this.supported || this.unlocked) return;
@@ -334,6 +335,7 @@ const TTS = {
   speak(text, rate) {
     return new Promise(resolve => {
       if (!this.supported || !text) return resolve();
+      Rec.stop();
       // Safari may drop an utterance queued right after an unnecessary cancel()
       if (speechSynthesis.speaking || speechSynthesis.pending) speechSynthesis.cancel();
       const u = new SpeechSynthesisUtterance(text);
@@ -354,12 +356,73 @@ const TTS = {
 };
 
 const speakText = it => (typeof it === 'string' ? it : it.hanzi).replace(/[…]/g, '').trim();
+// ============================================================ Recorded audio (audio/index.json, made by tools/make_audio.py)
+// Files are fetched (through the SW's persistent 'panda-audio' cache) and played from blob URLs, because
+// Safari won't play media a service worker serves without Range support.
+const SILENT_WAV = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
+const AUDIO_CACHE = 'panda-audio';
+const Rec = {
+  index: null, el: null, unlocked: false, blobs: new Map(), cur: null,
+  async load() {
+    try { const r = await fetch('audio/index.json'); if (r.ok) this.index = await r.json(); } catch {}
+    logI('audio', this.index ? `เสียงอัด ${Object.keys(this.index.texts).length} คำ × ${this.index.voices.length} เสียง` : 'ไม่มีเสียงอัด');
+  },
+  voices() { return this.index ? this.index.voices.map(v => v.id) : []; },
+  usable() { return !!(this.index && S.settings.recordedAudio); },
+  url(text, voice) { const id = this.index && this.index.texts[text]; return id ? `audio/${voice}/${id}.mp3` : null; },
+  allUrls() { return this.voices().flatMap(v => Object.values(this.index.texts).map(id => `audio/${v}/${id}.mp3`)); },
+  voice() {
+    const vs = this.voices();
+    if (TTS.persona && TTS.persona.rec) return TTS.persona.rec;
+    return vs.includes(S.settings.recVoice) ? S.settings.recVoice : vs[0];
+  },
+  // iOS lets a media element play without a tap only after it has played once from a tap.
+  unlock() {
+    if (this.unlocked) return;
+    const el = this.el || (this.el = new Audio());
+    el.src = SILENT_WAV;
+    el.play().then(() => { this.unlocked = true; }).catch(() => {});
+  },
+  async blobUrl(url) {
+    if (!this.blobs.has(url)) {
+      const r = await fetch(url);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      this.blobs.set(url, URL.createObjectURL(await r.blob()));
+    }
+    return this.blobs.get(url);
+  },
+  stop() { if (this.cur) this.cur(); if (this.el) this.el.pause(); },
+  async play(url, slow) {
+    this.stop();
+    let finish;
+    const ended = new Promise(res => { finish = res; });
+    this.cur = finish;
+    const src = await this.blobUrl(url);
+    if (this.cur !== finish) return; // a newer play() started meanwhile
+    const el = this.el || (this.el = new Audio());
+    el.src = src;
+    el.preservesPitch = el.webkitPreservesPitch = true;
+    el.defaultPlaybackRate = el.playbackRate = slow ? 0.7 : 1;
+    el.onended = () => finish();
+    el.onerror = () => finish();
+    setTimeout(finish, 10000);
+    await el.play();
+    return ended;
+  },
+};
+function stopAudio() {
+  Rec.stop();
+  if (TTS.supported && (speechSynthesis.speaking || speechSynthesis.pending)) speechSynthesis.cancel();
+}
 function play(it, slow = false) {
-  if (it && it.audio && !slow) {
-    const a = new Audio(it.audio);
-    return a.play().catch(() => TTS.speak(speakText(it)));
-  }
-  return TTS.speak(speakText(it), slow ? 0.6 : undefined);
+  const text = speakText(it);
+  const url = Rec.usable() && Rec.url(text, Rec.voice());
+  if (!url) return TTS.speak(text, slow ? 0.6 : undefined);
+  if (TTS.supported && (speechSynthesis.speaking || speechSynthesis.pending)) speechSynthesis.cancel();
+  return Rec.play(url, slow).catch(e => {
+    logW('audio', `เล่น ${url} ไม่ได้: ${errText(e)} → ใช้เสียงเครื่อง`);
+    return TTS.speak(text, slow ? 0.6 : undefined);
+  });
 }
 
 // ============================================================ Speech recognition (+ fallback levels)
@@ -1268,6 +1331,68 @@ function renderMe() {
 }
 const statCard = (ic, v, label) => h('div', { class: 'stat-card' }, h('div', { class: 'sc-ic' }, ic), h('b', {}, v), h('small', {}, label));
 
+const randomRow = toggle => [
+  toggle('randomVoice', 'สุ่มเสียงแต่ละข้อ'),
+  h('button', { class: 'btn btn-ghost', onclick: async () => {
+    const keep = TTS.persona;
+    for (let k = 0; k < 3; k++) { TTS.shuffle(); await play('你好'); if (!S.settings.randomVoice) break; }
+    TTS.persona = keep;
+  } }, '🎲 ฟังตัวอย่างเสียงสุ่ม')];
+
+function recCard(set, toggle) {
+  if (!Rec.index) return null;
+  const vs = Rec.voices();
+  const cur = vs.includes(S.settings.recVoice) ? S.settings.recVoice : vs[0];
+  const list = h('div', { class: 'voice-list' }, ...Rec.index.voices.map(v => {
+    const b = h('button', { class: 'voice' + (v.id === cur ? ' on' : ''), onclick: () => {
+      set('recVoice', v.id);
+      list.querySelectorAll('.voice').forEach(x => x.classList.toggle('on', x === b));
+      Rec.play(Rec.url('你好', v.id)).catch(e => toast('เล่นเสียงไม่ได้: ' + errText(e)));
+    } }, h('span', { class: 'v-name' }, v.label), h('small', {}, 'เสียงคนจีนคุณภาพสูง'), h('span', { class: 'v-ic' }, '🔊'));
+    return b;
+  }));
+  const info = h('p', { class: 'muted small' });
+  const total = Rec.allUrls().length;
+  audioCached().then(n => { info.textContent = n >= total ? `✅ เก็บในเครื่องครบ ${total} ไฟล์ ใช้ได้แม้ไม่มีเน็ต` : `เก็บในเครื่องแล้ว ${n}/${total} ไฟล์ (คำที่เคยฟังจะเก็บไว้เอง)`; });
+  const dl = h('button', { class: 'btn btn-jade', onclick: () => downloadAudio(dl, info) }, '📥 โหลดเสียงทั้งหมดไว้ใช้ออฟไลน์ (~10 MB)');
+  return h('section', { class: 'card-box' }, h('h3', {}, '🎧 เสียงอัด (แนะนำ)'),
+    toggle('recordedAudio', 'ใช้เสียงอัดแทนเสียงเครื่อง'),
+    h('p', { class: 'muted small' }, 'เสียงหลัก (ใช้เมื่อปิดการสุ่ม):'), list,
+    randomRow(toggle),
+    dl, info,
+    h('p', { class: 'muted small' }, 'ควรโหลดผ่าน Wi-Fi ก่อนไปจีน'));
+}
+
+async function audioCached() {
+  try {
+    const c = await caches.open(AUDIO_CACHE);
+    return (await c.keys()).filter(r => r.url.endsWith('.mp3')).length;
+  } catch { return 0; }
+}
+
+async function downloadAudio(btn, info) {
+  if (!('caches' in window)) { toast('เครื่องนี้เก็บไฟล์ไว้ไม่ได้'); return; }
+  btn.disabled = true;
+  try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch {}
+  const c = await caches.open(AUDIO_CACHE);
+  const have = new Set((await c.keys()).map(r => new URL(r.url).pathname));
+  const all = Rec.allUrls(), total = all.length;
+  const todo = all.filter(u => !have.has(new URL(u, location.href).pathname));
+  let done = total - todo.length, fail = 0;
+  const worker = async () => {
+    while (todo.length) {
+      const u = todo.shift();
+      try { await c.add(u); } catch { fail++; }
+      done++;
+      info.textContent = `กำลังโหลด… ${done}/${total}`;
+    }
+  };
+  await Promise.all([1, 2, 3, 4, 5, 6].map(worker));
+  logI('audio', `โหลดออฟไลน์ ${done - fail}/${total} fail ${fail}`);
+  info.textContent = fail ? `โหลดไม่สำเร็จ ${fail} ไฟล์ — กดอีกครั้งเพื่อลองใหม่` : `✅ เก็บในเครื่องครบ ${total} ไฟล์ ใช้ได้แม้ไม่มีเน็ต`;
+  btn.disabled = false;
+}
+
 function renderSettings() {
   const s = S.settings;
   const set = (k, v) => { s[k] = v; save(); };
@@ -1309,15 +1434,12 @@ function renderSettings() {
     h('section', { class: 'card-box' }, h('h3', {}, 'เป้าหมายรายวัน'), goalSel),
     h('section', { class: 'card-box' }, h('h3', {}, 'การแสดงผล'),
       toggle('showThai', 'แสดงคำอ่านไทย'), toggle('showHanzi', 'แสดงตัวจีน (ตัวเล็ก)'), toggle('sfx', 'เสียงเอฟเฟกต์')),
-    h('section', { class: 'card-box' }, h('h3', {}, 'เสียงจีน (TTS)'),
+    recCard(set, toggle),
+    h('section', { class: 'card-box' }, h('h3', {}, Rec.index ? 'เสียงสำรองของเครื่อง' : 'เสียงจีน (TTS)'),
+      Rec.usable() ? h('p', { class: 'muted small' }, 'ใช้เมื่อคำนั้นไม่มีเสียงอัด หรือปิดเสียงอัดไว้') : null,
       voiceNow, voiceList,
       h('label', { class: 'row' }, h('span', {}, 'ความเร็ว'), rate),
-      toggle('randomVoice', 'สุ่มเสียงแต่ละข้อ (เสียงสูง/ต่ำต่างกัน)'),
-      h('button', { class: 'btn btn-ghost', onclick: async () => {
-        const keep = TTS.persona;
-        for (let k = 0; k < 3; k++) { TTS.shuffle(); await TTS.speak('你好'); if (!S.settings.randomVoice) break; }
-        TTS.persona = keep;
-      } }, '🎲 ฟังตัวอย่างเสียงสุ่ม'),
+      Rec.index ? null : randomRow(toggle),
       h('details', { class: 'howto', open: !TTS.voices.length || noBetter },
         h('summary', {}, '📥 โหลดเสียงจีนเพิ่ม (ฟรี)'),
         h('ol', {},
@@ -1627,7 +1749,7 @@ function endSession() {
   if (L) logI('lesson', `end ${L.mode} at ${L.i}/${L.queue.length}`);
   L = null;
   TTS.persona = null;
-  if (TTS.supported) speechSynthesis.cancel();
+  stopAudio();
   const el = lessonEl();
   el.hidden = true; el.replaceChildren();
   // Leaving #/lesson fires hashchange, which renders; only render directly if the hash won't change.
@@ -1902,7 +2024,7 @@ function exSpeak(ex) {
   const renderA = () => {
     const mic = micButton('แตะแล้วพูด', async () => {
       if (mic.classList.contains('on')) { status.textContent = 'กำลังตรวจ…'; Speech.stop(); return; }
-      if (TTS.supported) speechSynthesis.cancel();
+      stopAudio();
       mic.classList.add('on');
       mic.querySelector('.mic-l').textContent = 'แตะเมื่อพูดจบ';
       status.textContent = 'กำลังเปิดไมค์…';
@@ -1963,7 +2085,7 @@ function exSpeak(ex) {
     const after = h('div', { class: 'self-row' });
     const mic = micButton('แตะเพื่ออัด', async () => {
       if (ctl) { ctl.stop(); return; }
-      if (TTS.supported) speechSynthesis.cancel();
+      stopAudio();
       mic.classList.add('on');
       mic.querySelector('.mic-l').textContent = 'แตะเพื่อหยุด';
       status.textContent = 'กำลังอัด… พูดตามได้เลย';
@@ -2069,7 +2191,7 @@ function exToneSpeak(ex) {
     status.textContent = cal ? 'ครั้งแรก: แตะไมค์แล้วพูด "อาาา" ยาว ๆ ด้วยเสียงพูดปกติ 2 วินาที (เพื่อปรับให้เข้ากับเสียงคุณ)' : 'แตะไมค์ แล้วพูดชัด ๆ — หยุดพูดแล้วระบบจะตรวจเอง';
     const mic = micButton(cal ? 'ปรับเสียง' : 'แตะแล้วพูด', async () => {
       if (ctl) { ctl.stop(); return; }
-      if (TTS.supported) speechSynthesis.cancel();
+      stopAudio();
       mic.classList.add('on');
       if (!cal) status.textContent = 'พูดได้เลย 🎙️';
       let clip;
@@ -2203,6 +2325,9 @@ function registerSW() {
 async function boot() {
   TTS.init();
   document.addEventListener('pointerdown', () => { TTS.unlock(); audioCtx(); }, { once: true });
+  // a click (not pointerdown) counts as a user gesture for media on iOS; retried until it works
+  document.addEventListener('click', () => Rec.unlock(), true);
+  Rec.load();
   try { await loadContent(); }
   catch (e) {
     logE('boot', 'loadContent ' + errText(e));

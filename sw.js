@@ -1,7 +1,8 @@
 // Service worker: app shell cache-first, lesson content network-first (so new lessons arrive without a version bump).
 // Bump VERSION whenever index.html / app.js / style.css / icons change.
-const VERSION = 'v1.5.0';
+const VERSION = 'v1.6.0';
 const CACHE = 'panda-talk-' + VERSION;
+const AUDIO = 'panda-audio';
 const SHELL = [
   './',
   './index.html',
@@ -10,6 +11,7 @@ const SHELL = [
   './manifest.webmanifest',
   './content/units.json',
   './content/charpy.json',
+  './audio/index.json',
   './assets/icons/icon.svg',
   './assets/icons/icon-192.png',
   './assets/icons/icon-512.png',
@@ -24,7 +26,8 @@ self.addEventListener('install', e => {
 
 self.addEventListener('activate', e => {
   e.waitUntil((async () => {
-    for (const k of await caches.keys()) if (k !== CACHE) await caches.delete(k);
+    // 'panda-audio' (recorded words) is not versioned, so updates never throw the downloaded sound away.
+    for (const k of await caches.keys()) if (k !== CACHE && k !== AUDIO) await caches.delete(k);
     await self.clients.claim();
   })());
 });
@@ -34,7 +37,19 @@ self.addEventListener('message', e => { if (e.data === 'skipWaiting') self.skipW
 self.addEventListener('fetch', e => {
   const req = e.request;
   if (req.method !== 'GET' || new URL(req.url).origin !== location.origin) return;
-  const isContent = new URL(req.url).pathname.includes('/content/');
+  const path = new URL(req.url).pathname;
+  const isContent = path.includes('/content/') || path.endsWith('/audio/index.json');
+  if (path.includes('/audio/') && path.endsWith('.mp3')) {
+    e.respondWith((async () => {
+      const cache = await caches.open(AUDIO);
+      const hit = await cache.match(req, { ignoreSearch: true });
+      if (hit) return hit;
+      const res = await fetch(req);
+      if (res.ok) cache.put(req, res.clone());
+      return res;
+    })());
+    return;
+  }
   e.respondWith((async () => {
     const cache = await caches.open(CACHE);
     if (isContent) {
