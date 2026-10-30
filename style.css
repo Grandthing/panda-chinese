@@ -496,3 +496,5 @@ input, textarea, select { -webkit-user-select: text; user-select: text; -webkit-
 .num-sets { display: flex; flex-wrap: wrap; gap: 8px; }
 .opt-num { font-size: 24px; font-weight: 800; letter-spacing: .5px; }
 .chip-btn:disabled { opacity: .45; }
+.word.recall .word-mean { font-size: 26px; font-weight: 800; }
+.recall-hint { margin-top: 8px; font-size: 17px; }

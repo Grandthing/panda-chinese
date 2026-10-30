@@ -128,7 +128,7 @@ addEventListener('pagehide', () => { saveNow(); Log.flush(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) { saveNow(); Log.flush(); } });
 
 // ============================================================ Debug log (ring buffer, kept across sessions → LINE / file)
-const APP_VERSION = '1.12.0';
+const APP_VERSION = '1.13.0';
 const LOG_KEY = 'pandaTalk.log';
 const LOG_MAX = 400;
 const safeJson = v => { try { return JSON.stringify(v); } catch { return String(v); } };
@@ -1073,7 +1073,7 @@ const items = ids => ids.map(id => C.items[id]).filter(it => it && !it.npc);
 
 // After a correct answer, say it out loud too (thenSpeak): hearing alone doesn't make you able to say it.
 const thenSpeak = (ex, it) => (Speech.level() !== 'off' && canSpeak(it) ? { ...ex, thenSpeak: true } : ex);
-function mixedFor(its, n, pool, { speak = Math.max(2, Math.round(n / 5)), tone = true } = {}) {
+function mixedFor(its, n, pool, { speak = Math.max(2, Math.round(n / 5)), tone = true, recall = 0 } = {}) {
   const out = [];
   const list = shuffle(its);
   for (let k = 0; k < n && list.length; k++) {
@@ -1081,7 +1081,7 @@ function mixedFor(its, n, pool, { speak = Math.max(2, Math.round(n / 5)), tone =
     const r = rand();
     out.push(it.listenOnly || (r >= 0.2 && r < 0.65) ? (r < 0.4 ? thenSpeak(mkListen(it, pool), it) : mkListen(it, pool)) : canBuild(it) && r < 0.2 ? mkBuild(it) : mkMeaning(it, pool));
   }
-  if (Speech.level() !== 'off') for (const it of pick(its.filter(canSpeak), speak)) out.push({ type: 'speak', item: it });
+  if (Speech.level() !== 'off') for (const it of pick(its.filter(canSpeak), speak)) out.push({ type: 'speak', item: it, recall: rand() < recall });
   if (tone) { const t = mkTone(toneSetFor(its)); if (t) out.push(t); }
   return out;
 }
@@ -1135,7 +1135,7 @@ function buildSession(mode, entry) {
     const score = id => { const r = S.srs[id]; return (r ? r.box - Math.min(r.wrong, 3) : 0) + rand() * 2.5; };
     const ids = pool.map(id => [id, score(id)]).sort((a, b) => a[1] - b[1]).slice(0, 14).map(([id]) => id);
     const its = items(ids);
-    q.push(...shuffle(mixedFor(its, 14, pool, { speak: 4 })));
+    q.push(...shuffle(mixedFor(its, 14, pool, { speak: 4, recall: 0.5 })));
     if (its.length >= 4) q.push(mkMatch(its));
     const dialogs = units.flatMap(u => u.lessons.flatMap(l => l.dialogs || []));
     for (const d of pick(dialogs, 1)) q.push(...expandDialog(d));
@@ -1150,6 +1150,14 @@ function buildSession(mode, entry) {
         .sort((a, b) => (b.set === it.set) - (a.set === it.set) || shared(b, it) - shared(a, it));
       q.push({ type: 'talk', item: it, options: shuffle([it, ...others.slice(0, 3)]), thenSpeak: speakOK, must: true });
     }
+  } else if (mode === 'recall') {
+    // Thai meaning only → say it in Chinese. Weakest / least-practised learned words first.
+    const score = id => { const r = S.srs[id]; return (r ? r.box - Math.min(r.wrong, 3) : 0) + rand() * 2.5; };
+    const seen = new Set();
+    const its = learnedIds().map(id => C.items[id]).filter(it => canSpeak(it) && !it.npc)
+      .map(it => [it, score(it.id)]).sort((a, b) => a[1] - b[1]).map(([it]) => it)
+      .filter(it => { const k = meaningKey(it.meaning); if (seen.has(k)) return false; seen.add(k); return true; });
+    for (const it of its.slice(0, 12)) q.push({ type: 'speak', item: it, recall: true });
   } else if (mode === 'numbers') {
     // Hear a number inside a real sentence, pick it, then say it (must) to pass.
     const sets = entry.setId === 'all' ? C.numSets : C.numSets.filter(st => st.id === entry.setId);
@@ -1507,6 +1515,11 @@ function renderReview() {
       h('h3', {}, '🏆 ท้าทายตัวเอง: คำเก่าทั้งหมด'),
       h('p', { class: 'muted' }, 'สุ่ม 14 คำจากทุกวันที่เรียนมา เน้นคำที่เคยผิด/ไม่ได้เจอนาน · ฟัง แปล เรียง พูด · ไม่เสียหัวใจ · ได้ชุดใหม่ทุกรอบ'),
       h('button', { class: 'btn btn-primary', disabled: learned.length < 6, onclick: () => startSession('mix') }, learned.length < 6 ? 'เรียนให้ครบ 2 บทก่อน' : '🏆 เริ่มท้าทาย')),
+    h('section', { class: 'card-box' },
+      h('h3', {}, '🧠 พูดจากความจำ'),
+      h('p', { class: 'muted' }, 'เห็นแค่ความหมายภาษาไทย → นึกแล้วพูดเป็นภาษาจีนเอง ไม่มี pinyin ให้ดู · ติดได้กด 💡 ใบ้ · 12 คำ เน้นคำที่ลืมบ่อย · ไม่เสียหัวใจ'),
+      h('button', { class: 'btn btn-primary', disabled: learned.length < 4 || Speech.level() === 'off', onclick: () => startSession('recall') },
+        learned.length < 4 ? 'เรียนบทแรกก่อน' : '🧠 เริ่มพูดจากความจำ')),
     C.sentSets.length ? talkCard() : null,
     C.numSets.length ? h('section', { class: 'card-box' },
       h('h3', {}, '🔢 ฟังตัวเลขในสถานการณ์จริง'),
@@ -2297,20 +2310,48 @@ function exSpeak(ex) {
   const status = h('div', { class: 'speak-status', role: 'status' });
   const diffBox = h('div');
   let attempts = 0, finished = false;
+  // recall: only the Thai meaning is shown — say it from memory. Hints cost the "remembered" credit;
+  // giving up (or 3 misses) shows the answer and the word comes back sooner in reviews.
+  const recall = !!ex.recall;
+  let hints = 0, revealed = !recall;
+  const card = h('div');
+  const reveal = () => {
+    if (revealed) return;
+    revealed = true;
+    srsUpdate(it.id, false);
+    card.replaceChildren(wordCard(it), playBtns(it));
+    play(it);
+  };
+  const hintCard = () => {
+    const steps = [S.settings.showThai ? ['คำอ่านไทย: ', h('b', {}, it.thai)] : null, ['pinyin: ', h('b', {}, pyEl(it.pinyin))]].filter(Boolean);
+    card.replaceChildren(h('div', { class: 'word big recall' },
+      h('div', { class: 'word-mean' }, it.meaning),
+      ...steps.slice(0, hints).map(x => h('div', { class: 'recall-hint' }, ...x))),
+      h('div', { class: 'play-row' },
+        hints < steps.length ? h('button', { class: 'btn btn-ghost small', onclick: () => { hints++; hintCard(); } }, `💡 ใบ้ (${hints + 1}/${steps.length})`) : null,
+        h('button', { class: 'btn btn-ghost small', onclick: () => { reveal(); status.textContent = 'ฟังเฉลย แล้วพูดตาม'; } }, '👀 ดูเฉลย')));
+  };
+  if (recall) hintCard(); else card.replaceChildren(wordCard(it), playBtns(it));
+  const fromMemory = () => recall && !hints && !revealed;
 
   const done = (kind, r) => {
     if (finished) return;
     finished = true;
     box.querySelectorAll('button').forEach(b => { b.disabled = true; });
     if (kind === 'skip') { setFoot(footBtn('ต่อไป', advance, 'btn-ghost')); advance(); return; }
-    if (kind === 'auto') { S.stats.speakAuto++; S.stats.speakAutoPass++; srsUpdate(it.id, true); L.xp += 3; addXp(3); }
+    if (kind === 'auto') { S.stats.speakAuto++; S.stats.speakAutoPass++; if (!recall || fromMemory()) srsUpdate(it.id, true); L.xp += 3; addXp(3); }
     else { S.stats.speakSelf++; L.xp += 2; addXp(2); }
+    if (fromMemory()) { L.xp += 2; addXp(2); L.recalled = (L.recalled || 0) + 1; }
     save();
     sfx('ok');
-    feedback(true, it, { title: kind === 'auto' ? (r.best >= 0.8 ? 'ชัดมาก! 🎉' : 'ใกล้แล้ว! ระบบฟังออก') : 'เยี่ยม! ฝึกพูดต่อไปนะ' });
+    feedback(true, it, { title: fromMemory() ? 'จำได้! พูดจากความจำ 🧠🎉' : kind === 'auto' ? (r.best >= 0.8 ? 'ชัดมาก! 🎉' : 'ใกล้แล้ว! ระบบฟังออก') : 'เยี่ยม! ฝึกพูดต่อไปนะ' });
   };
   const offerSelf = () => box.append(h('div', { class: 'self-row' },
     h('button', { class: 'btn btn-jade', onclick: () => done('self') }, '✓ ฉันพูดได้แล้ว (ตรวจเอง)')));
+  const onMiss = () => {
+    if (recall && !revealed && attempts >= 3) { reveal(); status.append(h('br'), 'เฉลยให้แล้ว — ฟังแล้วพูดตาม'); }
+    else if (attempts === (recall ? 6 : 3)) offerSelf();
+  };
 
   const renderA = () => {
     const mic = micButton('แตะแล้วพูด', async () => {
@@ -2339,7 +2380,7 @@ function exSpeak(ex) {
         // A wrong tone changes the word for a native listener, so it never passes as "close enough".
         const toneErr = !!dv && dd.syl.some(s => s.kind === 'tone');
         // A long sentence must be mostly right; a short word passes once it's recognisable.
-        if (r.best >= (normZh(it.hanzi).length >= 6 ? 0.75 : 0.5) && !toneErr) {
+        if (r.best >= (recall ? 0.8 : normZh(it.hanzi).length >= 6 ? 0.75 : 0.5) && !toneErr) {
           if (dv) status.replaceChildren('ผ่าน แต่ยังมีจุดที่ควรแก้ 👇');
           return done('auto', r);
         }
@@ -2352,7 +2393,7 @@ function exSpeak(ex) {
             info ? [' ', pyEl(info.pinyin), ` (${info.meaning})`] : null, ' — คนจีนจะเข้าใจเป็นอีกคำ');
         } else status.replaceChildren(h('b', { class: 'bad-t' }, '✕ ยังไม่ตรง: '), 'ระบบได้ยิน ', h('b', { lang: 'zh-CN' }, r.heard || '(ไม่ชัด)'),
           dv ? ' — ดูจุดที่ผิดด้านล่าง' : ' — ฟังต้นแบบแล้วลองอีกครั้ง');
-        if (attempts === 3) offerSelf();
+        onMiss();
       } catch (err) {
         mic.classList.remove('on');
         mic.querySelector('.mic-l').textContent = 'แตะแล้วพูด';
@@ -2360,7 +2401,7 @@ function exSpeak(ex) {
         if (err === 'no-speech' || err === 'aborted') {
           attempts++;
           status.textContent = 'ไม่ได้ยินเสียง ลองพูดดังขึ้นอีกนิด';
-          if (attempts === 3) offerSelf();
+          onMiss();
           return;
         }
         Speech.srBroken = true;
@@ -2405,10 +2446,11 @@ function exSpeak(ex) {
 
   const lvl = Speech.level();
   lvl === 'A' ? renderA() : lvl === 'B' ? renderB() : renderC();
+  if (recall && lvl === 'C') status.textContent = 'นึกแล้วพูดออกมา จากนั้นกด "ดูเฉลย" เพื่อเทียบ';
   // must: the number drill only passes once you've said it (self-check still appears after 3 misses).
   setFoot(ex.must ? '' : footBtn('ข้ามข้อนี้', () => done('skip'), 'btn-ghost'));
-  setTimeout(() => play(it), 250);
-  return h('div', { class: 'ex' }, prompt(ex.follow ? 'ถูกแล้ว! ทีนี้พูดออกมา' : 'พูดตาม'), wordCard(it), playBtns(it), box, status, diffBox,
+  if (!recall) setTimeout(() => play(it), 250);
+  return h('div', { class: 'ex' }, prompt(recall ? '🧠 พูดเป็นภาษาจีนจากความจำ' : ex.follow ? 'ถูกแล้ว! ทีนี้พูดออกมา' : 'พูดตาม'), card, box, status, diffBox,
     ex.must ? null : h('button', { class: 'link', onclick: snoozeMic }, 'ตอนนี้พูดไม่ได้ (พัก 15 นาที)'));
 }
 
@@ -2546,6 +2588,7 @@ function finishSession() {
     extra.push('+1 ❤️ จากการฝึก');
     goalHit = addXp(5); sess.xp += 5;
   }
+  if (sess.mode === 'recall') extra.unshift(`🧠 จำได้เองโดยไม่ใช้ตัวช่วย ${sess.recalled || 0}/${sess.queue.filter(q => q.recall).length} คำ`);
   if (goalHit) extra.push('ครบเป้าวันนี้! เติมหัวใจเต็ม ❤️×5');
   const streakUp = touchStreak();
   if (streakUp) extra.push(`🔥 สตรีค ${S.streak.current} วัน!`);
