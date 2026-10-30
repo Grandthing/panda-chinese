@@ -128,7 +128,7 @@ addEventListener('pagehide', () => { saveNow(); Log.flush(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) { saveNow(); Log.flush(); } });
 
 // ============================================================ Debug log (ring buffer, kept across sessions → LINE / file)
-const APP_VERSION = '1.8.0';
+const APP_VERSION = '1.9.0';
 const LOG_KEY = 'pandaTalk.log';
 const LOG_MAX = 400;
 const safeJson = v => { try { return JSON.stringify(v); } catch { return String(v); } };
@@ -422,6 +422,7 @@ function play(it, slow = false) {
   if (!url) return TTS.speak(text, slow ? 0.6 : undefined);
   if (TTS.supported && (speechSynthesis.speaking || speechSynthesis.pending)) speechSynthesis.cancel();
   return Rec.play(url, slow).catch(e => {
+    if (e && e.name === 'AbortError') return; // a newer sound took over; don't speak this one with the device voice too
     logW('audio', `เล่น ${url} ไม่ได้: ${errText(e)} → ใช้เสียงเครื่อง`);
     return TTS.speak(text, slow ? 0.6 : undefined);
   });
@@ -483,6 +484,18 @@ const Speech = {
 };
 
 const normZh = s => (s || '').replace(/[\s，。！？、,.!?…'"“”‘’：:；;]/g, '').toLowerCase();
+// Stop listening early only once the whole phrase is in: a short "accept" form (早 for 早上好, 那 for 那个)
+// would otherwise end the mic while the learner is still mid-phrase.
+function heardWhole(item, alts) {
+  const main = normZh(item.hanzi);
+  const full = [main, ...(item.accept || []).map(normZh).filter(x => x.length >= main.length)];
+  return alts.some(raw => {
+    const a = normZh(raw);
+    if (full.some(t => t && a.includes(t))) return true;
+    const d = speechDiff(item, raw);
+    return !!d && !d.extra && d.syl.every(s => s.kind === 'ok');
+  });
+}
 function scoreSpeech(item, alts) {
   const targets = [item.hanzi, ...(item.accept || [])].map(normZh).filter(Boolean);
   const rejects = (item.reject || []).map(normZh).filter(Boolean);
@@ -724,8 +737,16 @@ function analyzeClip(clip) {
     frames.push({ rms, f0: 0 });
     if (rms > maxRms) maxRms = rms;
   }
-  const gate = Math.max(0.004, maxRms * 0.15);
-  frames.forEach((fr, i) => { if (fr.rms >= gate) fr.f0 = yin(x, sr, i * hop, size); });
+  const gate = Math.max(0.004, maxRms * 0.15), keep = Math.max(0.003, maxRms * 0.06);
+  // Hysteresis: once voiced, keep tracking down to a lower level, so the quiet falling tail of tone 4 isn't cut off.
+  let on = false;
+  frames.forEach((fr, i) => {
+    if (fr.rms >= gate || (on && fr.rms >= keep)) fr.f0 = yin(x, sr, i * hop, size);
+    on = fr.f0 > 0;
+  });
+  // Buzzy vowels (shì, zhè, cì) are not periodic enough for the strict threshold: retry looser.
+  if (frames.filter(fr => fr.f0 > 0).length < 12)
+    frames.forEach((fr, i) => { if (!fr.f0 && fr.rms >= keep) fr.f0 = yin(x, sr, i * hop, size, 70, 500, 0.3); });
   return { frames, voiced: frames.filter(fr => fr.f0 > 0).length, maxRms };
 }
 
@@ -774,7 +795,27 @@ function bins(a, n) {
 const TPL = { 1: [5, 5, 5, 5, 5], 2: [3, 3.2, 3.6, 4.3, 5], 3: [2.2, 1.5, 1, 1.6, 3.2], '3h': [2.2, 1.7, 1.3, 1.1, 1], 4: [5, 4.3, 3.4, 2.4, 1.3] };
 const tplSt = (key, step) => TPL[key].map(c => (c - 3) * step);
 
+// Shape first, tuned on real learner recordings: learners move pitch far less than the textbook contours
+// (a tone 4 that falls 3 semitones is heard as tone 4), and the "อา" calibration is a rough voice centre at best,
+// so level only separates tone 1 (high/mid flat) from tone 3 (low).
 function classifyTone(curve, hasProfile, step) {
+  const c = curve, m = mean(c), mx = Math.max(...c), mn = Math.min(...c), imn = c.indexOf(mn);
+  const fall = Math.max(c[0], c[1], c[2]) - c[4];
+  const rise = c[4] - Math.min(c[0], c[1], c[2]);
+  if (fall >= 2 && c[4] <= c[3] + 0.3 && rise < 1.5) return { tone: hasProfile && c[0] < -1 ? 3 : 4, margin: fall - 2 };
+  // Right direction all the way but small: counted, flagged "weak" so the learner is told to exaggerate.
+  const steps = c.slice(1).map((v, i) => v - c[i]);
+  if (fall >= 1.5 && steps.every(d => d <= 0.3)) return { tone: 4, weak: true, margin: 0 };
+  if (rise >= 1.5 && steps.every(d => d >= -0.3) && !(hasProfile && m < -1.5)) return { tone: 2, weak: true, margin: 0 };
+  if (rise >= 2 && c[4] >= mx - 0.8) {
+    const dipped = imn >= 1 && imn <= 3 && c[0] - mn >= 1.5 && (!hasProfile || mn < -1);
+    return { tone: dipped ? 3 : 2, margin: rise - 2 };
+  }
+  if (mx - mn < 2.5) return { tone: hasProfile && m < -1.5 ? 3 : 1, margin: 2.5 - (mx - mn) };
+  return classifyByTemplate(curve, hasProfile, step);
+}
+
+function classifyByTemplate(curve, hasProfile, step) {
   const um = mean(curve);
   // Without a calibrated voice centre the level is unreliable, so judge almost purely by contour shape.
   const lw = hasProfile ? 0.45 : 0.03;
@@ -801,8 +842,8 @@ function toneCheck(clip, tones) {
   const syl = segs.map((s, i) => {
     let st = A.frames.slice(s.start, s.end + 1).map(f => f.f0).filter(Boolean).map(f => 12 * Math.log2(f / ref));
     st = medianFilter(fixOctaves(st), 5);
-    const k = Math.floor(st.length * 0.1);
-    const core = st.slice(k, st.length - k);
+    // Trim the consonant transition at the start, but keep almost all of the end, where tone 4 does its falling.
+    const core = st.slice(Math.floor(st.length * 0.15), st.length - Math.floor(st.length * 0.05));
     const curve = bins(core.length ? core : st, 5);
     const target = sp[i];
     if (target.tone === 5) return { target: 5, got: 5, ok: true, raw: st };
@@ -810,7 +851,7 @@ function toneCheck(clip, tones) {
     // Tone 3 is above all "low": a calibrated speaker staying well below their centre without a big rise counts.
     const low3 = target.tone === 3 && S.pitchProfile && mean(curve) < -1.5 && curve[4] - curve[0] < 4;
     const got = low3 ? 3 : c.tone;
-    return { target: target.tone, half: target.half, got, ok: got === target.tone, raw: st, curve };
+    return { target: target.tone, half: target.half, got, ok: got === target.tone, weak: !low3 && !!c.weak, raw: st, curve };
   });
   return { ok: syl.every(r => r.ok), syl, step };
 }
@@ -2152,7 +2193,7 @@ function exSpeak(ex) {
       const t0 = Date.now();
       try {
         const alts = await Speech.recognize({
-          isGood: a => scoreSpeech(it, a).best >= 0.8,
+          isGood: a => heardWhole(it, a),
           onStart: () => { status.textContent = 'พูดได้เลย 🎙️'; },
         });
         mic.classList.remove('on');
@@ -2284,10 +2325,12 @@ function exToneSpeak(ex) {
   const meter = h('div', { class: 'meter' }, h('i'));
 
   const showResult = r => {
-    logI('tone', `${t.pinyin} → ${r.reason || r.syl.map(s => `${s.target}:${s.got}` + (s.curve ? ` [${s.curve.map(v => v.toFixed(1)).join(',')}]` : '')).join(' ')}`);
+    // full pitch track (every 2nd frame) so a log shows whether e.g. the end of a tone-4 fall was captured
+    logI('tone', `${t.pinyin} → ${r.reason || r.syl.map(s => `${s.target}:${s.got}${s.weak ? 'w' : ''}` + (s.curve ? ` [${s.curve.map(v => v.toFixed(1)).join(',')}]` +
+      ` raw(${s.raw.filter((_, j) => j % 2 === 0).map(v => v.toFixed(0)).join(',')})` : '')).join(' ')}`);
     if (r.reason) {
       res.replaceChildren();
-      status.textContent = r.reason === 'quiet' ? 'ไม่ได้ยินเสียงชัด ลองพูดดังขึ้นใกล้ไมค์' : `ลองพูดให้ได้ ${t.tones.length} พยางค์ชัด ๆ เว้นจังหวะนิดหนึ่ง`;
+      status.textContent = r.reason === 'quiet' ? 'จับเส้นเสียงไม่ได้ ลองลากสระให้ยาวขึ้น (เช่น shìii) และพูดใกล้ไมค์' :`ลองพูดให้ได้ ${t.tones.length} พยางค์ชัด ๆ เว้นจังหวะนิดหนึ่ง`;
       return;
     }
     r.syl.forEach(s => {
@@ -2299,11 +2342,13 @@ function exToneSpeak(ex) {
     const sp = sylls(t.pinyin);
     res.replaceChildren(pitchPlot(r),
       h('div', { class: 'syl-row' }, ...r.syl.map((s, i) => h('div', { class: 'syl ' + (s.ok ? 'ok' : 'no') },
-        h('b', {}, sp[i] ? sp[i].text : ''), h('small', {}, s.target === 5 ? 'เสียงเบา' : s.ok ? '✓ ถูก' : `คล้าย${TONE_NAME[s.got]}`)))),
+        h('b', {}, sp[i] ? sp[i].text : ''), h('small', {}, s.target === 5 ? 'เสียงเบา' : s.ok ? (s.weak ? '✓ ผ่าน แต่ยังเบา' : '✓ ถูก') : `คล้าย${TONE_NAME[s.got]}`)))),
       ...r.syl.map((s, i) => s.ok || s.target === 5 ? null : h('p', { class: 'hint' }, h('b', {}, pyEl(sp[i] ? sp[i].text : '')),
         ` — ต้องเป็น ${TONE_NAME[s.target]} แต่${contourText(s.curve)} จึงฟังเป็น${TONE_NAME[s.got]}`, h('br'), '💡 ' + TONE_HINT[s.target])),
       h('p', { class: 'muted small' }, 'เส้นประ = เป้าหมาย · เส้นทึบ = เสียงคุณ'));
-    status.textContent = r.ok ? 'วรรณยุกต์ถูกต้อง! 🎉' : 'ยังไม่ตรง ลองอีกครั้งได้';
+    const weak = r.syl.filter(s => s.ok && s.weak);
+    status.textContent = !r.ok ? 'ยังไม่ตรง ลองอีกครั้งได้' : weak.length
+      ? `ผ่าน! แต่${weak.some(s => s.target === 4) ? 'เสียง 4 ให้ตกแรงกว่านี้ เหมือนพูด "ไม่!" แบบสั่ง' : 'เสียง 2 ให้ขึ้นสูงกว่านี้ เหมือนถาม "ห๊ะ?"'}` : 'วรรณยุกต์ถูกต้อง! 🎉';
     if (r.ok && !passed) { passed = true; sfx('ok'); L.xp += 3; addXp(3); setFoot(footBtn('ต่อไป', advance, 'btn-jade')); }
   };
 
