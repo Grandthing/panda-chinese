@@ -128,7 +128,7 @@ addEventListener('pagehide', () => { saveNow(); Log.flush(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) { saveNow(); Log.flush(); } });
 
 // ============================================================ Debug log (ring buffer, kept across sessions → LINE / file)
-const APP_VERSION = '1.11.0';
+const APP_VERSION = '1.12.0';
 const LOG_KEY = 'pandaTalk.log';
 const LOG_MAX = 400;
 const safeJson = v => { try { return JSON.stringify(v); } catch { return String(v); } };
@@ -182,6 +182,9 @@ async function loadContent() {
   // Number drills (tools/make_numbers.py). Optional: the course works without them.
   C.numSets = await fetch('content/numbers.json').then(r => r.ok ? r.json() : { sets: [] }).then(d => d.sets || []).catch(() => []);
   C.numSets.forEach(st => st.groups.forEach((g, gi) => g.forEach((it, k) => { it.id = `n_${st.id}_${gi}_${k}`; it.group = g; it.set = st; })));
+  // Long shop / food / snack sentences (tools/make_sentences.py), unlocked once all their words were learned.
+  C.sentSets = await fetch('content/sentences.json').then(r => r.ok ? r.json() : { sets: [] }).then(d => d.sets || []).catch(() => []);
+  C.sentSets.forEach(st => st.sentences.forEach((x, k) => { x.id = `s_${st.id}_${k}`; x.set = st; }));
   C.order = []; C.byId = {}; C.itemUnit = {};
   for (const u of C.units) {
     u.items = uniq(u.lessons.flatMap(l => l.newItems || []));
@@ -521,6 +524,9 @@ function heardWhole(item, alts) {
     return !!d && !d.extra && d.syl.every(s => s.kind === 'ok');
   });
 }
+// Said alone, a syllable has no context, so the recogniser often writes an interjection with the right sound
+// but its dictionary tone (一 yī → 咦 yí). Those don't count as a tone error for one-syllable words.
+const INTERJ_PY = { 噫: 'yī', 咦: 'yí', 呃: 'è', 嗯: 'ng', 欸: 'ēi', 诶: 'éi', 哎: 'āi', 唉: 'āi', 喔: 'ō', 噢: 'ō', 哦: 'ó' };
 function scoreSpeech(item, alts) {
   const targets = [item.hanzi, ...(item.accept || [])].map(normZh).filter(Boolean);
   const rejects = (item.reject || []).map(normZh).filter(Boolean);
@@ -535,6 +541,12 @@ function scoreSpeech(item, alts) {
     }
     // Homophones / tone-sandhi spellings (泥好 for 你好, 前 for 钱) are correct speech.
     if (best < 1) { const d = speechDiff(item, raw); if (d && !d.extra && d.syl.every(s => s.kind === 'ok')) { best = 1; heard = raw; } }
+  }
+  const one = [...normZh(item.hanzi)];
+  if (best < 1 && one.length === 1) {
+    const want = stripTones(sylls(item.pinyin)[0] ? sylls(item.pinyin)[0].text : '').toLowerCase();
+    const raw = alts.find(r => { const a = [...normZh(r)]; return a.length && a.every(c => INTERJ_PY[c] && stripTones(INTERJ_PY[c]) === want); });
+    if (raw) { best = 1; heard = raw; }
   }
   if (best < 0.8) {
     for (const raw of alts) {
@@ -560,6 +572,7 @@ function charPy() {
   if (charPyMap) return charPyMap;
   charPyMap = {};
   if (charPyExtra) for (const [py, cs] of Object.entries(charPyExtra)) for (const c of cs) charPyMap[c] = py;
+  Object.assign(charPyMap, INTERJ_PY);
   const add = (hz, py) => {
     const cs = [...normZh(hz)], ss = sylls(py);
     if (cs.length === ss.length) cs.forEach((c, i) => { if (!seen.has(c)) { seen.add(c); charPyMap[c] = ss[i].text.toLowerCase(); } });
@@ -639,8 +652,11 @@ function diffLine(s) {
     case 'initial': return [P(s.py), ` — พยัญชนะต้นผิด: ได้ยินเป็น `, P(s.heardPy), ` ต้องขึ้นต้นด้วย "${s.a.ini || 'สระ'}"`,
       INI_HINT[s.a.ini] ? [h('br'), '💡 ' + INI_HINT[s.a.ini]] : null];
     case 'final': return [P(s.py), ' — สระ/เสียงท้ายผิด: ได้ยินเป็น ', P(s.heardPy), ` ต้องลงท้ายด้วย "${s.a.fin}"`,
-      /ng$/.test(s.a.fin) !== /ng$/.test(s.b.fin) ? [h('br'), '💡 -ng = เสียงสะกด "ง" ส่วน -n = สะกด "น" ต้องแยกให้ชัด'] : null];
-    default: return [P(s.py), ' — ระบบได้ยินเป็น ', h('b', { lang: 'zh-CN' }, s.heard), s.heardPy ? [' ', pyEl(s.heardPy)] : null, ' ซึ่งเป็นคนละเสียง ฟังต้นแบบช้า ๆ แล้วลองใหม่'];
+      /ng$/.test(s.a.fin) !== /ng$/.test(s.b.fin) ? [h('br'), '💡 -ng = เสียงสะกด "ง" ส่วน -n = สะกด "น" ต้องแยกให้ชัด'] : null,
+      s.a.fin === 'er' ? [h('br'), '💡 èr = "เอ้อ" แล้วม้วนลิ้นขึ้นท้ายเสียง (เหมือน r ภาษาอังกฤษ) ถ้าไม่ม้วนจะเหลือแค่ "เออ"'] : null];
+    default: return [P(s.py), ' — ระบบได้ยินเป็น ', h('b', { lang: 'zh-CN' }, s.heard), s.heardPy ? [' ', pyEl(s.heardPy)] : null, ' ซึ่งเป็นคนละเสียง ฟังต้นแบบช้า ๆ แล้วลองใหม่',
+      // shí/zhī/chī/rì heard as xu/ju/qu: the Thai "อือ" came out with rounded lips and a flat tongue.
+      s.a && /^(zh|ch|sh|r)$/.test(s.a.ini) && s.a.fin === 'i' ? [h('br'), `💡 ${s.a.ini}i: ม้วนปลายลิ้นขึ้นไปใกล้เพดาน ปากไม่ห่อ (ยิ้มนิด ๆ) แล้วออกเสียง "อือ" ค้างไว้ — ถ้าห่อปากหรือลิ้นแบนจะกลายเป็น xu / ju`] : null];
   }
 }
 // Chips (one per syllable; tap = hear that syllable) plus one explanation line per wrong syllable.
@@ -1123,6 +1139,17 @@ function buildSession(mode, entry) {
     if (its.length >= 4) q.push(mkMatch(its));
     const dialogs = units.flatMap(u => u.lessons.flatMap(l => l.dialogs || []));
     for (const d of pick(dialogs, 1)) q.push(...expandDialog(d));
+  } else if (mode === 'talk') {
+    // Hear a whole sentence made of learned words, pick its meaning, then say it (must) to pass.
+    const sets = entry.setId === 'all' ? C.sentSets : C.sentSets.filter(st => st.id === entry.setId);
+    const open = sets.flatMap(st => st.sentences.filter(sentOpen));
+    const shared = (a, b) => a.needs.filter(id => b.needs.includes(id)).length;
+    for (const it of shuffle(open).slice(0, 8)) {
+      // Distractors: other sentences of the scene sharing the most words, so you have to hear the whole thing.
+      const others = shuffle(C.sentSets.flatMap(st => st.sentences).filter(x => x !== it && x.meaning !== it.meaning))
+        .sort((a, b) => (b.set === it.set) - (a.set === it.set) || shared(b, it) - shared(a, it));
+      q.push({ type: 'talk', item: it, options: shuffle([it, ...others.slice(0, 3)]), thenSpeak: speakOK, must: true });
+    }
   } else if (mode === 'numbers') {
     // Hear a number inside a real sentence, pick it, then say it (must) to pass.
     const sets = entry.setId === 'all' ? C.numSets : C.numSets.filter(st => st.id === entry.setId);
@@ -1152,7 +1179,7 @@ function buildSession(mode, entry) {
   return { mode, entry, queue: q.map((ex, i) => ({ ...ex, uid: i })), i: 0, results: {}, xp: 0, combo: 0, heartsLost: 0, nextUid: q.length };
 }
 
-const GRADED = new Set(['listen', 'meaning', 'build', 'tone', 'dialog', 'match', 'num']);
+const GRADED = new Set(['listen', 'meaning', 'build', 'tone', 'dialog', 'match', 'num', 'talk']);
 const HEART_MODES = new Set(['lesson', 'checkpoint', 'challenge', 'skip']);
 const PATH_MODES = new Set(['lesson', 'checkpoint', 'challenge']);
 
@@ -1450,6 +1477,23 @@ function toneStatBars() {
   }));
 }
 
+const sentOpen = x => x.needs.every(id => S.srs[id]);
+function talkCard() {
+  const all = C.sentSets.flatMap(st => st.sentences), open = all.filter(sentOpen);
+  // The day whose lessons unlock the next sentence, to say what's coming.
+  const dayOf = id => (C.itemUnit[id] ? C.itemUnit[id].day : 99);
+  const next = all.filter(x => !sentOpen(x)).map(x => Math.max(...x.needs.filter(id => !S.srs[id]).map(dayOf))).sort((a, b) => a - b)[0];
+  return h('section', { class: 'card-box' },
+    h('h3', {}, '🗣️ ฝึกพูดประโยคยาว'),
+    h('p', { class: 'muted' }, 'ฟังประโยคตอนซื้อของ / สั่งอาหาร / ซื้อขนม → เลือกความหมาย → พูดทั้งประโยคให้ถูกถึงจะผ่าน · ใช้เฉพาะคำที่เรียนแล้ว · ไม่เสียหัวใจ'),
+    h('div', { class: 'num-sets' }, ...C.sentSets.map(st => {
+      const n = st.sentences.filter(sentOpen).length;
+      return h('button', { class: 'chip-btn', disabled: !n, onclick: () => startSession('talk', { id: 'talk-' + st.id, setId: st.id }) }, `${st.icon} ${st.title} (${n}/${st.sentences.length})`);
+    }), h('button', { class: 'chip-btn on', disabled: !open.length, onclick: () => startSession('talk', { id: 'talk-all', setId: 'all' }) }, '🎲 รวมทุกแบบ')),
+    h('p', { class: 'muted small' }, `ปลดล็อคแล้ว ${open.length}/${all.length} ประโยค` +
+      (next && next < 99 ? ` · เรียน${next > 20 ? 'บทพิเศษ ' + (next - 20) : 'ถึงวันที่ ' + next} จะได้ประโยคเพิ่ม` : '')));
+}
+
 function renderReview() {
   const due = dueIds(), learned = learnedIds();
   const weak = weakIds().slice(0, 6).map(id => C.items[id]);
@@ -1463,6 +1507,7 @@ function renderReview() {
       h('h3', {}, '🏆 ท้าทายตัวเอง: คำเก่าทั้งหมด'),
       h('p', { class: 'muted' }, 'สุ่ม 14 คำจากทุกวันที่เรียนมา เน้นคำที่เคยผิด/ไม่ได้เจอนาน · ฟัง แปล เรียง พูด · ไม่เสียหัวใจ · ได้ชุดใหม่ทุกรอบ'),
       h('button', { class: 'btn btn-primary', disabled: learned.length < 6, onclick: () => startSession('mix') }, learned.length < 6 ? 'เรียนให้ครบ 2 บทก่อน' : '🏆 เริ่มท้าทาย')),
+    C.sentSets.length ? talkCard() : null,
     C.numSets.length ? h('section', { class: 'card-box' },
       h('h3', {}, '🔢 ฟังตัวเลขในสถานการณ์จริง'),
       h('p', { class: 'muted' }, 'ฟังคนจีนพูดประโยคที่มีตัวเลข → เลือกตัวเลขที่ได้ยิน → พูดตัวเลขนั้นออกมาให้ผ่าน · 10 ข้อ · ไม่เสียหัวใจ'),
@@ -1993,7 +2038,7 @@ function renderExercise() {
   const body = $('#l-body');
   body.scrollTop = 0;
   logI('ex', `${L.i + 1}/${L.queue.length} ${ex.type}${ex.retry ? '(ซ่อม)' : ''} ${(ex.item && ex.item.id) || (ex.set && ex.set.id) || (ex.dialog && ex.dialog.id) || (ex.target && ex.target.pinyin) || ''}`);
-  const R = { num: exNum, intro: exIntro, listen: exListen, meaning: exMeaning, build: exBuild, tone: exTone, speak: exSpeak, match: exMatch, dialog: exDialog, tone_speak: exToneSpeak }[ex.type];
+  const R = { talk: exTalk, num: exNum, intro: exIntro, listen: exListen, meaning: exMeaning, build: exBuild, tone: exTone, speak: exSpeak, match: exMatch, dialog: exDialog, tone_speak: exToneSpeak }[ex.type];
   body.replaceChildren(R(ex));
 }
 
@@ -2100,6 +2145,18 @@ function exNum(ex) {
   return h('div', { class: 'ex' }, h('div', { class: 'tag' }, `${it.set.icon} ${it.set.title}`), prompt('ฟังแล้วเลือก: ' + it.set.ask),
     h('div', { class: 'big-play' }, h('button', { class: 'btn-speaker', 'aria-label': 'ฟังอีกครั้ง', onclick: () => play(ln) }, '🔊'),
       h('button', { class: 'btn-play slow', 'aria-label': 'ฟังช้า', onclick: () => play(ln, true) }, '🐢')),
+    list.wrap);
+}
+
+function exTalk(ex) {
+  const it = ex.item;
+  setTimeout(() => play(it), 250);
+  let enable;
+  const list = choiceList(ex.options, o => o.meaning, () => enable());
+  enable = checkFlow(list.get, sel => sel === it, it, []);
+  return h('div', { class: 'ex' }, h('div', { class: 'tag' }, `${it.set.icon} ${it.set.title}`), prompt('ฟังแล้วเลือกความหมาย'),
+    h('div', { class: 'big-play' }, h('button', { class: 'btn-speaker', 'aria-label': 'ฟังอีกครั้ง', onclick: () => play(it) }, '🔊'),
+      h('button', { class: 'btn-play slow', 'aria-label': 'ฟังช้า', onclick: () => play(it, true) }, '🐢')),
     list.wrap);
 }
 
@@ -2265,6 +2322,7 @@ function exSpeak(ex) {
       const t0 = Date.now();
       try {
         const alts = await Speech.recognize({
+          timeoutMs: Math.max(6000, normZh(it.hanzi).length * 700),
           isGood: a => heardWhole(it, a),
           onStart: () => { status.textContent = 'พูดได้เลย 🎙️'; },
         });
@@ -2280,7 +2338,8 @@ function exSpeak(ex) {
         if (dv) setTimeout(() => diffBox.scrollIntoView({ block: 'nearest', behavior: 'smooth' }), 50);
         // A wrong tone changes the word for a native listener, so it never passes as "close enough".
         const toneErr = !!dv && dd.syl.some(s => s.kind === 'tone');
-        if (r.best >= 0.5 && !toneErr) {
+        // A long sentence must be mostly right; a short word passes once it's recognisable.
+        if (r.best >= (normZh(it.hanzi).length >= 6 ? 0.75 : 0.5) && !toneErr) {
           if (dv) status.replaceChildren('ผ่าน แต่ยังมีจุดที่ควรแก้ 👇');
           return done('auto', r);
         }

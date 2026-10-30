@@ -31,6 +31,10 @@ def texts():
             for g in st['groups']:
                 for it in g:
                     out |= {speak_text(it['hanzi'])} | {speak_text(ln['hanzi']) for ln in it['lines']}
+    sents = os.path.join(ROOT, 'content', 'sentences.json')
+    if os.path.exists(sents):  # long shop / food / snack sentences
+        for st in json.load(open(sents, encoding='utf-8'))['sets']:
+            out |= {speak_text(x['hanzi']) for x in st['sentences']}
     return sorted(t for t in out if t)
 
 

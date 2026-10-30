@@ -495,3 +495,4 @@ input, textarea, select { -webkit-user-select: text; user-select: text; -webkit-
 /* number drills */
 .num-sets { display: flex; flex-wrap: wrap; gap: 8px; }
 .opt-num { font-size: 24px; font-weight: 800; letter-spacing: .5px; }
+.chip-btn:disabled { opacity: .45; }
