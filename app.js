@@ -128,7 +128,7 @@ addEventListener('pagehide', () => { saveNow(); Log.flush(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) { saveNow(); Log.flush(); } });
 
 // ============================================================ Debug log (ring buffer, kept across sessions → LINE / file)
-const APP_VERSION = '1.10.0';
+const APP_VERSION = '1.11.0';
 const LOG_KEY = 'pandaTalk.log';
 const LOG_MAX = 400;
 const safeJson = v => { try { return JSON.stringify(v); } catch { return String(v); } };
@@ -179,6 +179,9 @@ async function loadContent() {
   C.toneSets = data.toneSets || [];
   C.version = data.contentVersion || '';
   for (const [id, it] of Object.entries(C.items)) it.id = id;
+  // Number drills (tools/make_numbers.py). Optional: the course works without them.
+  C.numSets = await fetch('content/numbers.json').then(r => r.ok ? r.json() : { sets: [] }).then(d => d.sets || []).catch(() => []);
+  C.numSets.forEach(st => st.groups.forEach((g, gi) => g.forEach((it, k) => { it.id = `n_${st.id}_${gi}_${k}`; it.group = g; it.set = st; })));
   C.order = []; C.byId = {}; C.itemUnit = {};
   for (const u of C.units) {
     u.items = uniq(u.lessons.flatMap(l => l.newItems || []));
@@ -487,12 +490,31 @@ const Speech = {
 };
 
 const normZh = s => (s || '').replace(/[\s，。！？、,.!?…'"“”‘’：:；;]/g, '').toLowerCase();
+// The recogniser often writes numbers as digits ("38块", "2:30", "308"). Spell them out every way a person
+// could have said them: counting (三十八 / 两百), digit by digit (三零八 / 幺二零五), clock time (两点半).
+const ZH_DIG = '零一二三四五六七八九';
+function zhNum(n) {
+  if (n < 10) return ZH_DIG[n];
+  if (n < 100) { const t = Math.floor(n / 10), u = n % 10; return (t === 1 ? '' : ZH_DIG[t]) + '十' + (u ? ZH_DIG[u] : ''); }
+  if (n < 1000) { const hh = Math.floor(n / 100), r = n % 100; return ZH_DIG[hh] + '百' + (!r ? '' : r < 10 ? '零' + ZH_DIG[r] : r < 20 ? '一' + zhNum(r) : zhNum(r)); }
+  if (n < 10000) { const k = Math.floor(n / 1000), r = n % 1000; return ZH_DIG[k] + '千' + (!r ? '' : r < 100 ? '零' + zhNum(r) : zhNum(r)); }
+  return String(n);
+}
+const liang = s => s.replace(/^二(?=[百千点个位块]|$)/, '两').replace(/(^|[^十])二(?=[点个位块])/g, '$1两');
+function numVariants(raw) {
+  if (!/\d/.test(raw)) return [raw];
+  const clock = raw.replace(/(\d{1,2})[:：](\d{2})/g, (_, hh, mm) => zhNum(+hh) + '点' + (mm === '00' ? '' : mm === '30' ? '半' : zhNum(+mm) + '分'));
+  const count = clock.replace(/\d+(\.\d+)?/g, m => m.includes('.') ? zhNum(+m.split('.')[0]) + '块' + [...m.split('.')[1]].map(d => ZH_DIG[d]).join('') : zhNum(+m));
+  const digit = clock.replace(/\d+/g, m => [...m].map(d => ZH_DIG[d]).join(''));
+  return uniq([raw, count, liang(count), digit, digit.replace(/一/g, '幺')]);
+}
+const expandAlts = alts => uniq(alts.flatMap(numVariants));
 // Stop listening early only once the whole phrase is in: a short "accept" form (早 for 早上好, 那 for 那个)
 // would otherwise end the mic while the learner is still mid-phrase.
 function heardWhole(item, alts) {
   const main = normZh(item.hanzi);
   const full = [main, ...(item.accept || []).map(normZh).filter(x => x.length >= main.length)];
-  return alts.some(raw => {
+  return expandAlts(alts).some(raw => {
     const a = normZh(raw);
     if (full.some(t => t && a.includes(t))) return true;
     const d = speechDiff(item, raw);
@@ -502,6 +524,7 @@ function heardWhole(item, alts) {
 function scoreSpeech(item, alts) {
   const targets = [item.hanzi, ...(item.accept || [])].map(normZh).filter(Boolean);
   const rejects = (item.reject || []).map(normZh).filter(Boolean);
+  alts = expandAlts(alts);
   let best = 0, heard = alts[0] || '', toneTrap = null;
   for (const raw of alts) {
     const a = normZh(raw);
@@ -1032,13 +1055,15 @@ function expandDialog(d) {
 }
 const items = ids => ids.map(id => C.items[id]).filter(it => it && !it.npc);
 
-function mixedFor(its, n, pool, { speak = 1, tone = true } = {}) {
+// After a correct answer, say it out loud too (thenSpeak): hearing alone doesn't make you able to say it.
+const thenSpeak = (ex, it) => (Speech.level() !== 'off' && canSpeak(it) ? { ...ex, thenSpeak: true } : ex);
+function mixedFor(its, n, pool, { speak = Math.max(2, Math.round(n / 5)), tone = true } = {}) {
   const out = [];
   const list = shuffle(its);
   for (let k = 0; k < n && list.length; k++) {
     const it = list[k % list.length];
     const r = rand();
-    out.push(it.listenOnly || (r >= 0.2 && r < 0.65) ? mkListen(it, pool) : canBuild(it) && r < 0.2 ? mkBuild(it) : mkMeaning(it, pool));
+    out.push(it.listenOnly || (r >= 0.2 && r < 0.65) ? (r < 0.4 ? thenSpeak(mkListen(it, pool), it) : mkListen(it, pool)) : canBuild(it) && r < 0.2 ? mkBuild(it) : mkMeaning(it, pool));
   }
   if (Speech.level() !== 'off') for (const it of pick(its.filter(canSpeak), speak)) out.push({ type: 'speak', item: it });
   if (tone) { const t = mkTone(toneSetFor(its)); if (t) out.push(t); }
@@ -1065,7 +1090,7 @@ function buildSession(mode, entry) {
       if (canBuild(it)) p2.push(mkBuild(it));
     }
     for (const it of reviews) {
-      p2.push(it.listenOnly || rand() < 0.6 ? mkListen(it, pool) : mkMeaning(it, pool));
+      p2.push(it.listenOnly || rand() < 0.6 ? thenSpeak(mkListen(it, pool), it) : mkMeaning(it, pool));
       if (!news.length && canBuild(it) && rand() < 0.5) p2.push(mkBuild(it));
     }
     if (!news.length && speakOK) for (const it of pick(reviews.filter(canSpeak), 2)) p2.push({ type: 'speak', item: it });
@@ -1081,7 +1106,7 @@ function buildSession(mode, entry) {
     const final = !!entry.lesson.final;
     const ids = final ? uniq(C.units.filter(u => !u.bonus).flatMap(u => u.items)) : entry.unit.items;
     const its = items(ids);
-    q.push(...shuffle(mixedFor(its, entry.lesson.size || 12, ids, { speak: final ? 3 : 2 })));
+    q.push(...shuffle(mixedFor(its, entry.lesson.size || 12, ids, { speak: final ? 4 : 3 })));
     if (its.length >= 4) q.push(mkMatch(its));
     if (final) {
       const dialogs = C.units.filter(u => !u.bonus).flatMap(u => u.lessons.flatMap(l => l.dialogs || []));
@@ -1094,10 +1119,15 @@ function buildSession(mode, entry) {
     const score = id => { const r = S.srs[id]; return (r ? r.box - Math.min(r.wrong, 3) : 0) + rand() * 2.5; };
     const ids = pool.map(id => [id, score(id)]).sort((a, b) => a[1] - b[1]).slice(0, 14).map(([id]) => id);
     const its = items(ids);
-    q.push(...shuffle(mixedFor(its, 14, pool, { speak: 3 })));
+    q.push(...shuffle(mixedFor(its, 14, pool, { speak: 4 })));
     if (its.length >= 4) q.push(mkMatch(its));
     const dialogs = units.flatMap(u => u.lessons.flatMap(l => l.dialogs || []));
     for (const d of pick(dialogs, 1)) q.push(...expandDialog(d));
+  } else if (mode === 'numbers') {
+    // Hear a number inside a real sentence, pick it, then say it (must) to pass.
+    const sets = entry.setId === 'all' ? C.numSets : C.numSets.filter(st => st.id === entry.setId);
+    for (const it of shuffle(sets.flatMap(st => st.groups.flat())).slice(0, 10))
+      q.push({ type: 'num', item: it, line: pick(it.lines, 1)[0], options: shuffle(it.group), thenSpeak: speakOK, must: true });
   } else if (mode === 'review') {
     let ids = uniq(dueIds().concat(weakIds())).slice(0, 8);
     if (ids.length < 4) ids = uniq(ids.concat(pick(learnedIds(), 8))).slice(0, 8);
@@ -1122,7 +1152,7 @@ function buildSession(mode, entry) {
   return { mode, entry, queue: q.map((ex, i) => ({ ...ex, uid: i })), i: 0, results: {}, xp: 0, combo: 0, heartsLost: 0, nextUid: q.length };
 }
 
-const GRADED = new Set(['listen', 'meaning', 'build', 'tone', 'dialog', 'match']);
+const GRADED = new Set(['listen', 'meaning', 'build', 'tone', 'dialog', 'match', 'num']);
 const HEART_MODES = new Set(['lesson', 'checkpoint', 'challenge', 'skip']);
 const PATH_MODES = new Set(['lesson', 'checkpoint', 'challenge']);
 
@@ -1433,6 +1463,11 @@ function renderReview() {
       h('h3', {}, '🏆 ท้าทายตัวเอง: คำเก่าทั้งหมด'),
       h('p', { class: 'muted' }, 'สุ่ม 14 คำจากทุกวันที่เรียนมา เน้นคำที่เคยผิด/ไม่ได้เจอนาน · ฟัง แปล เรียง พูด · ไม่เสียหัวใจ · ได้ชุดใหม่ทุกรอบ'),
       h('button', { class: 'btn btn-primary', disabled: learned.length < 6, onclick: () => startSession('mix') }, learned.length < 6 ? 'เรียนให้ครบ 2 บทก่อน' : '🏆 เริ่มท้าทาย')),
+    C.numSets.length ? h('section', { class: 'card-box' },
+      h('h3', {}, '🔢 ฟังตัวเลขในสถานการณ์จริง'),
+      h('p', { class: 'muted' }, 'ฟังคนจีนพูดประโยคที่มีตัวเลข → เลือกตัวเลขที่ได้ยิน → พูดตัวเลขนั้นออกมาให้ผ่าน · 10 ข้อ · ไม่เสียหัวใจ'),
+      h('div', { class: 'num-sets' }, ...C.numSets.map(st => h('button', { class: 'chip-btn', onclick: () => startSession('numbers', { id: 'num-' + st.id, setId: st.id }) }, `${st.icon} ${st.title}`)),
+        h('button', { class: 'chip-btn on', onclick: () => startSession('numbers', { id: 'num-all', setId: 'all' }) }, '🎲 รวมทุกแบบ'))) : null,
     h('section', { class: 'card-box' },
       h('h3', {}, '👂 ฝึกฟังคนจีนพูด'),
       h('p', { class: 'muted' }, 'ฟัง 12 ข้อจากคำที่เรียนไปแล้ว สุ่มเสียงคนพูดทุกข้อ · ไม่เสียหัวใจ · จบได้ +1 ❤️'),
@@ -1958,7 +1993,7 @@ function renderExercise() {
   const body = $('#l-body');
   body.scrollTop = 0;
   logI('ex', `${L.i + 1}/${L.queue.length} ${ex.type}${ex.retry ? '(ซ่อม)' : ''} ${(ex.item && ex.item.id) || (ex.set && ex.set.id) || (ex.dialog && ex.dialog.id) || (ex.target && ex.target.pinyin) || ''}`);
-  const R = { intro: exIntro, listen: exListen, meaning: exMeaning, build: exBuild, tone: exTone, speak: exSpeak, match: exMatch, dialog: exDialog, tone_speak: exToneSpeak }[ex.type];
+  const R = { num: exNum, intro: exIntro, listen: exListen, meaning: exMeaning, build: exBuild, tone: exTone, speak: exSpeak, match: exMatch, dialog: exDialog, tone_speak: exToneSpeak }[ex.type];
   body.replaceChildren(R(ex));
 }
 
@@ -2024,7 +2059,10 @@ function checkFlow(getSel, isOk, info, srsIds) {
     const ok = isOk(getSel());
     grade(ex, ok, srsIds);
     lockOptions();
-    feedback(ok, info);
+    if (ok && ex.thenSpeak) {
+      L.queue.splice(L.i + 1, 0, { type: 'speak', item: ex.item, must: ex.must, follow: true, uid: L.nextUid++ });
+      feedback(ok, info, { title: 'ถูก! ต่อไปพูดออกเสียง 🎙️' });
+    } else feedback(ok, info);
   }, 'btn-primary', true);
   setFoot(btn);
   return () => { btn.disabled = false; };
@@ -2050,6 +2088,18 @@ function exListen(ex) {
   return h('div', { class: 'ex' }, prompt('ฟังแล้วเลือกความหมาย'),
     h('div', { class: 'big-play' }, h('button', { class: 'btn-speaker', 'aria-label': 'ฟังอีกครั้ง', onclick: () => play(it) }, '🔊'),
       h('button', { class: 'btn-play slow', 'aria-label': 'ฟังช้า', onclick: () => play(it, true) }, '🐢')),
+    list.wrap);
+}
+
+function exNum(ex) {
+  const it = ex.item, ln = ex.line;
+  setTimeout(() => play(ln), 250);
+  let enable;
+  const list = choiceList(ex.options, o => h('div', { class: 'opt-num' }, o.label), () => enable());
+  enable = checkFlow(list.get, sel => sel === it, ln, []);
+  return h('div', { class: 'ex' }, h('div', { class: 'tag' }, `${it.set.icon} ${it.set.title}`), prompt('ฟังแล้วเลือก: ' + it.set.ask),
+    h('div', { class: 'big-play' }, h('button', { class: 'btn-speaker', 'aria-label': 'ฟังอีกครั้ง', onclick: () => play(ln) }, '🔊'),
+      h('button', { class: 'btn-play slow', 'aria-label': 'ฟังช้า', onclick: () => play(ln, true) }, '🐢')),
     list.wrap);
 }
 
@@ -2296,10 +2346,11 @@ function exSpeak(ex) {
 
   const lvl = Speech.level();
   lvl === 'A' ? renderA() : lvl === 'B' ? renderB() : renderC();
-  setFoot(footBtn('ข้ามข้อนี้', () => done('skip'), 'btn-ghost'));
+  // must: the number drill only passes once you've said it (self-check still appears after 3 misses).
+  setFoot(ex.must ? '' : footBtn('ข้ามข้อนี้', () => done('skip'), 'btn-ghost'));
   setTimeout(() => play(it), 250);
-  return h('div', { class: 'ex' }, prompt('พูดตาม'), wordCard(it), playBtns(it), box, status, diffBox,
-    h('button', { class: 'link', onclick: snoozeMic }, 'ตอนนี้พูดไม่ได้ (พัก 15 นาที)'));
+  return h('div', { class: 'ex' }, prompt(ex.follow ? 'ถูกแล้ว! ทีนี้พูดออกมา' : 'พูดตาม'), wordCard(it), playBtns(it), box, status, diffBox,
+    ex.must ? null : h('button', { class: 'link', onclick: snoozeMic }, 'ตอนนี้พูดไม่ได้ (พัก 15 นาที)'));
 }
 
 function pitchPlot(r) {

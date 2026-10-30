@@ -25,6 +25,12 @@ def texts():
     out = {speak_text(it['hanzi']) for it in data['items'].values() if it.get('hanzi')}
     for ts in data.get('toneSets', []):
         out |= {speak_text(h) for h in ts['hanzi']}
+    nums = os.path.join(ROOT, 'content', 'numbers.json')
+    if os.path.exists(nums):  # number drills: the answer itself and the sentences it is heard in
+        for st in json.load(open(nums, encoding='utf-8'))['sets']:
+            for g in st['groups']:
+                for it in g:
+                    out |= {speak_text(it['hanzi'])} | {speak_text(ln['hanzi']) for ln in it['lines']}
     return sorted(t for t in out if t)
 
 

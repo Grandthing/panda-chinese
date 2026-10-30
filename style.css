@@ -491,3 +491,7 @@ input, textarea, select { -webkit-user-select: text; user-select: text; -webkit-
 .guide ol, .guide ul { margin: 6px 0; padding-left: 22px; line-height: 1.6; }
 .guide li { margin-bottom: 6px; }
 .node-tip.new { background: var(--jade); border-color: var(--jade-d); color: #fff; }
+
+/* number drills */
+.num-sets { display: flex; flex-wrap: wrap; gap: 8px; }
+.opt-num { font-size: 24px; font-weight: 800; letter-spacing: .5px; }

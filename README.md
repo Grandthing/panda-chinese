@@ -47,6 +47,7 @@ python -m http.server 5173
 1. เพิ่มคำใน `items` ของ `content/units.json` — `hanzi`, `pinyin` (มีเครื่องหมายวรรณยุกต์), `thai` (เขียนตามเสียงพูดจริง จำนวนคำเท่ากับ pinyin), `meaning`, `cat`
 2. ใส่ id ของคำใน `newItems` ของบทที่ต้องการ (หรือสร้าง unit ใหม่ใน `units`)
 3. เปลี่ยน `contentVersion`
+   - แบบฝึกฟังตัวเลข (`content/numbers.json`) สร้างจาก `python tools/make_numbers.py` — แก้ตัวเลข/สถานการณ์ในไฟล์นั้นแล้วรันใหม่
 4. สร้างเสียงอัดของคำใหม่: `python -m pip install edge-tts` แล้ว `python tools/make_audio.py` (สร้างเฉพาะไฟล์ที่ยังไม่มี; คำที่ไม่มีเสียงอัดจะใช้เสียงเครื่องแทนอัตโนมัติ)
 5. เปิด `?lint` ให้ขึ้นว่า "ไม่พบปัญหา"
 
