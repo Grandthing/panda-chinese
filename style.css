@@ -176,6 +176,9 @@ input, textarea, select { -webkit-user-select: text; user-select: text; -webkit-
 .node.locked { background: var(--line); box-shadow: 0 6px 0 var(--locked-d); color: var(--muted); font-size: 22px; }
 .node.checkpoint { width: 80px; height: 80px; border-radius: 24px; }
 .node.checkpoint.locked { font-size: 26px; }
+.node.challenge { width: 80px; height: 80px; border-radius: 24px; }
+.node.challenge:not(.done):not(.locked) { background: var(--gold); box-shadow: 0 6px 0 #b8860b; }
+.node.challenge.locked { font-size: 26px; }
 .node.current { animation: pulse 1.6s ease-in-out infinite; }
 .node:active { transform: translateY(3px); }
 @keyframes pulse { 0%, 100% { box-shadow: 0 6px 0 var(--brand-d), 0 0 0 0 rgba(215, 38, 61, .35); } 50% { box-shadow: 0 6px 0 var(--brand-d), 0 0 0 12px rgba(215, 38, 61, 0); } }

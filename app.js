@@ -128,7 +128,7 @@ addEventListener('pagehide', () => { saveNow(); Log.flush(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) { saveNow(); Log.flush(); } });
 
 // ============================================================ Debug log (ring buffer, kept across sessions → LINE / file)
-const APP_VERSION = '1.9.0';
+const APP_VERSION = '1.10.0';
 const LOG_KEY = 'pandaTalk.log';
 const LOG_MAX = 400;
 const safeJson = v => { try { return JSON.stringify(v); } catch { return String(v); } };
@@ -183,6 +183,9 @@ async function loadContent() {
   for (const u of C.units) {
     u.items = uniq(u.lessons.flatMap(l => l.newItems || []));
     const add = e => { e.index = C.order.length; C.order.push(e); C.byId[e.id] = e; };
+    // Every 3 days the path opens with a challenge built from all the earlier days' words, so old words keep coming back.
+    if (!u.bonus && u.day >= 4 && (u.day - 1) % 3 === 0)
+      add({ id: 'ch-' + u.day, kind: 'challenge', unit: u, upto: u.day - 1, lesson: { size: 14 }, title: `ด่านท้าทาย: คำวันที่ 1–${u.day - 1}` });
     for (const l of u.lessons) add({ id: l.id, kind: 'lesson', unit: u, lesson: l, title: l.title });
     if (u.checkpoint) add({ id: u.checkpoint.id, kind: 'checkpoint', unit: u, lesson: u.checkpoint, title: u.checkpoint.final ? 'ด่านสอบสุดท้าย' : 'ด่านทบทวน' });
     for (const id of u.items) if (!C.itemUnit[id]) C.itemUnit[id] = u;
@@ -1084,6 +1087,17 @@ function buildSession(mode, entry) {
       const dialogs = C.units.filter(u => !u.bonus).flatMap(u => u.lessons.flatMap(l => l.dialogs || []));
       for (const d of pick(dialogs, 2)) q.push(...expandDialog(d));
     }
+  } else if (mode === 'challenge' || mode === 'mix') {
+    // Old words, weakest and least-practised first, with a little randomness so each run differs.
+    const units = C.units.filter(u => !u.bonus && (mode === 'mix' ? u.lessons.some(l => isDone(l.id)) : u.day <= entry.upto));
+    const pool = mode === 'mix' ? learnedIds() : uniq(units.flatMap(u => u.items));
+    const score = id => { const r = S.srs[id]; return (r ? r.box - Math.min(r.wrong, 3) : 0) + rand() * 2.5; };
+    const ids = pool.map(id => [id, score(id)]).sort((a, b) => a[1] - b[1]).slice(0, 14).map(([id]) => id);
+    const its = items(ids);
+    q.push(...shuffle(mixedFor(its, 14, pool, { speak: 3 })));
+    if (its.length >= 4) q.push(mkMatch(its));
+    const dialogs = units.flatMap(u => u.lessons.flatMap(l => l.dialogs || []));
+    for (const d of pick(dialogs, 1)) q.push(...expandDialog(d));
   } else if (mode === 'review') {
     let ids = uniq(dueIds().concat(weakIds())).slice(0, 8);
     if (ids.length < 4) ids = uniq(ids.concat(pick(learnedIds(), 8))).slice(0, 8);
@@ -1109,7 +1123,8 @@ function buildSession(mode, entry) {
 }
 
 const GRADED = new Set(['listen', 'meaning', 'build', 'tone', 'dialog', 'match']);
-const HEART_MODES = new Set(['lesson', 'checkpoint', 'skip']);
+const HEART_MODES = new Set(['lesson', 'checkpoint', 'challenge', 'skip']);
+const PATH_MODES = new Set(['lesson', 'checkpoint', 'challenge']);
 
 // ============================================================ UI kit
 const screen = () => $('#screen');
@@ -1319,9 +1334,10 @@ function renderLearn() {
       const st = nodeState(e);
       const off = [0, 46, 0, -46][k % 4];
       const rec = S.lessons[e.id];
-      const ic = e.kind === 'checkpoint' ? '👑' : st === 'locked' ? '🔒' : st === 'done' ? '✓' : '▶';
+      const ic = e.kind === 'checkpoint' ? '👑' : e.kind === 'challenge' ? '🏆' : st === 'locked' ? '🔒' : st === 'done' ? '✓' : '▶';
       const node = h('div', { class: 'node-wrap', style: `transform:translateX(${off}px)` },
-        st === 'current' ? h('div', { class: 'node-tip' }, 'เริ่มตรงนี้') : hasUnseen(e) ? h('div', { class: 'node-tip new' }, '🆕 มีคำเพิ่ม') : null,
+        st === 'current' ? h('div', { class: 'node-tip' }, 'เริ่มตรงนี้') :
+        e.kind === 'challenge' && st === 'open' ? h('div', { class: 'node-tip new' }, '🏆 ท้าทายคำเก่า') : hasUnseen(e) ? h('div', { class: 'node-tip new' }, '🆕 มีคำเพิ่ม') : null,
         h('button', { class: `node ${st} ${e.kind}`, 'aria-label': `${e.title} (${{ done: 'จบแล้ว', current: 'บทถัดไป', open: 'เปิดแล้ว', locked: 'ล็อค' }[st]})`, onclick: () => openNode(e) }, ic),
         rec && !rec.skipped ? h('div', { class: 'stars' }, '★'.repeat(rec.stars) + '☆'.repeat(3 - rec.stars)) : null);
       if (st === 'current' && !isBonus(e)) currentEl = node;
@@ -1351,13 +1367,15 @@ function openNode(e) {
     return;
   }
   const rec = S.lessons[e.id];
-  const its = items(e.kind === 'lesson' ? (e.lesson.newItems || []) : e.unit.items);
+  const chal = e.kind === 'challenge';
+  const its = items(e.kind === 'lesson' ? (e.lesson.newItems || []) : chal ? [] : e.unit.items);
   openSheet(h('div', { class: 'info-sheet' },
     h('div', { class: 'muted' }, `${isBonus(e) ? 'บทพิเศษ ' + (e.unit.day - 20) : 'วันที่ ' + e.unit.day} · ${e.unit.title}`),
     h('h3', {}, e.title),
     rec ? h('div', { class: 'stars big' }, '★'.repeat(rec.stars) + '☆'.repeat(3 - rec.stars)) : null,
+    chal ? h('p', {}, `สุ่มคำจากวันที่ 1–${e.upto} เน้นคำที่เคยผิดและคำที่ไม่ได้เจอนาน ทั้งฟัง แปล เรียงคำ พูด และบทสนทนา · เล่นซ้ำได้ทุกเมื่อ ได้คำชุดใหม่ทุกรอบ`) :
     its.length ? h('div', { class: 'chips' }, ...its.slice(0, 8).map(it => h('span', { class: 'chip' }, it.meaning))) : h('p', {}, 'สถานการณ์จำลอง ใช้ทุกอย่างที่เรียนมา'),
-    h('button', { class: 'btn btn-primary', onclick: () => { document.querySelector('.sheet-backdrop')?.click(); startSession(e.kind === 'checkpoint' ? 'checkpoint' : 'lesson', e); } }, rec ? 'เล่นอีกครั้ง' : 'เริ่มเรียน')));
+    h('button', { class: 'btn btn-primary', onclick: () => { document.querySelector('.sheet-backdrop')?.click(); startSession(e.kind === 'lesson' ? 'lesson' : e.kind, e); } }, rec ? 'เล่นอีกครั้ง' : chal ? '🏆 เริ่มท้าทาย' : 'เริ่มเรียน')));
 }
 
 function renderPhrases() {
@@ -1411,6 +1429,10 @@ function renderReview() {
       h('h3', {}, `🔁 คำที่ถึงเวลาทบทวน: ${due.length} คำ`),
       h('p', { class: 'muted' }, 'ทบทวนไม่เสียหัวใจ และจบ 1 บทได้หัวใจคืน +1'),
       h('button', { class: 'btn btn-primary', disabled: learned.length < 3, onclick: () => startSession('review') }, learned.length < 3 ? 'เรียนบทแรกก่อน' : 'เริ่มทบทวน')),
+    h('section', { class: 'card-box' },
+      h('h3', {}, '🏆 ท้าทายตัวเอง: คำเก่าทั้งหมด'),
+      h('p', { class: 'muted' }, 'สุ่ม 14 คำจากทุกวันที่เรียนมา เน้นคำที่เคยผิด/ไม่ได้เจอนาน · ฟัง แปล เรียง พูด · ไม่เสียหัวใจ · ได้ชุดใหม่ทุกรอบ'),
+      h('button', { class: 'btn btn-primary', disabled: learned.length < 6, onclick: () => startSession('mix') }, learned.length < 6 ? 'เรียนให้ครบ 2 บทก่อน' : '🏆 เริ่มท้าทาย')),
     h('section', { class: 'card-box' },
       h('h3', {}, '👂 ฝึกฟังคนจีนพูด'),
       h('p', { class: 'muted' }, 'ฟัง 12 ข้อจากคำที่เรียนไปแล้ว สุ่มเสียงคนพูดทุกข้อ · ไม่เสียหัวใจ · จบได้ +1 ❤️'),
@@ -2396,7 +2418,7 @@ function finishSession() {
   const stars = acc >= 0.95 ? 3 : acc >= 0.8 ? 2 : 1;
   let extra = [];
   let goalHit = false;
-  if (sess.mode === 'lesson' || sess.mode === 'checkpoint') {
+  if (PATH_MODES.has(sess.mode)) {
     const e = sess.entry;
     const prev = S.lessons[e.id];
     S.lessons[e.id] = { stars: Math.max(stars, prev && !prev.skipped ? prev.stars : 0), best: Math.max(acc, prev ? prev.best || 0 : 0), attempts: (prev ? prev.attempts || 0 : 0) + 1, doneAt: today() };
@@ -2424,8 +2446,9 @@ function finishSession() {
   $('#l-prog').style.width = '100%';
   $('#l-body').replaceChildren(h('div', { class: 'complete' },
     panda('party', 150),
-    h('h2', {}, finalDone ? 'จบหลักสูตรแล้ว! 你真棒!' : sess.mode === 'skip' && acc < 0.8 ? 'เกือบแล้ว!' : 'จบบทแล้ว!'),
-    sess.mode === 'lesson' || sess.mode === 'checkpoint' ? h('div', { class: 'stars big' }, '★'.repeat(stars) + '☆'.repeat(3 - stars)) : null,
+    h('h2', {}, finalDone ? 'จบหลักสูตรแล้ว! 你真棒!' : sess.mode === 'skip' && acc < 0.8 ? 'เกือบแล้ว!' :
+      sess.mode === 'challenge' || sess.mode === 'mix' ? (acc >= 0.8 ? 'คำเก่ายังจำได้ดี! 🏆' : 'ผ่านแล้ว! คำที่ผิดจะวนกลับมาให้ทบทวนอีก') : 'จบบทแล้ว!'),
+    PATH_MODES.has(sess.mode) ? h('div', { class: 'stars big' }, '★'.repeat(stars) + '☆'.repeat(3 - stars)) : null,
     h('div', { class: 'stat-grid' }, statCard('⚡', '+' + sess.xp, 'XP'), statCard('🎯', Math.round(acc * 100) + '%', 'ความแม่น'),
       statCard('📈', `${Math.min(xpToday(), S.settings.dailyGoalXp)}/${S.settings.dailyGoalXp}`, 'เป้าวันนี้')),
     ...extra.map(t => h('p', { class: 'celebrate' }, t))));
