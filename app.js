@@ -128,7 +128,7 @@ addEventListener('pagehide', () => { saveNow(); Log.flush(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) { saveNow(); Log.flush(); } });
 
 // ============================================================ Debug log (ring buffer, kept across sessions → LINE / file)
-const APP_VERSION = '1.14.1';
+const APP_VERSION = '1.15.0';
 const LOG_KEY = 'pandaTalk.log';
 const LOG_MAX = 400;
 const safeJson = v => { try { return JSON.stringify(v); } catch { return String(v); } };
@@ -527,6 +527,22 @@ function heardWhole(item, alts) {
 // Said alone, a syllable has no context, so the recogniser often writes an interjection with the right sound
 // but its dictionary tone (一 yī → 咦 yí). Those don't count as a tone error for one-syllable words.
 const INTERJ_PY = { 噫: 'yī', 咦: 'yí', 呃: 'è', 嗯: 'ng', 欸: 'ēi', 诶: 'éi', 哎: 'āi', 唉: 'āi', 喔: 'ō', 噢: 'ō', 哦: 'ó' };
+// A lone syllable has no context, so the recogniser guesses the most common word (水 → 岁 / 对 / "Siri").
+// After a miss, one-syllable words offer a short phrase around them; it passes because it contains the word.
+const CARRIER = {
+  shi4: ['是的', 'shì de'], hao3: ['好的', 'hǎo de'], dui4: ['对对对', 'duì duì duì'], yao4: ['我要', 'wǒ yào'],
+  mao: ['五毛', 'wǔ máo'], liang3: ['两个', 'liǎng ge'], qian2: ['多少钱', 'duōshao qián'], mai3: ['我要买', 'wǒ yào mǎi'],
+  mai4: ['卖完了', 'mài wán le'], gui4: ['太贵了', 'tài guì le'], xing2: ['行吗', 'xíng ma'], shui3: ['我要水', 'wǒ yào shuǐ'],
+  la4: ['很辣', 'hěn là'], tian2: ['很甜', 'hěn tián'], suan1: ['很酸', 'hěn suān'], you3: ['有吗', 'yǒu ma'],
+  zuo3: ['左边', 'zuǒbian'], you4: ['右边', 'yòubian'], piao4: ['一张票', 'yì zhāng piào'], dian3: ['快一点', 'kuài yìdiǎn'],
+  ma2: ['很麻', 'hěn má'], kuai: ['几块', 'jǐ kuài'],
+};
+function carrierHint(it) {
+  const c = CARRIER[it.id];
+  if (!c) return null;
+  return h('p', { class: 'hint' }, '💡 คำเดียวโดด ๆ ระบบฟังยาก ลองพูดเป็นวลี: ',
+    h('button', { class: 'chip-btn', onclick: () => TTS.speak(c[0], 0.8) }, h('b', { lang: 'zh-CN' }, c[0]), ' ', pyEl(c[1]), ' 🔊'));
+}
 function scoreSpeech(item, alts) {
   const targets = [item.hanzi, ...(item.accept || [])].map(normZh).filter(Boolean);
   const rejects = (item.reject || []).map(normZh).filter(Boolean);
@@ -543,6 +559,13 @@ function scoreSpeech(item, alts) {
     if (best < 1) { const d = speechDiff(item, raw); if (d && !d.extra && d.syl.every(s => s.kind === 'ok')) { best = 1; heard = raw; } }
   }
   const one = [...normZh(item.hanzi)];
+  // Curled vs flat tongue (sh/s, zh/z, ch/c) with the right tone: much of China says it this way and is understood,
+  // so it passes — the diff still shows the tip.
+  if (best < 0.85) for (const raw of alts) {
+    const d = speechDiff(item, raw);
+    if (d && !d.extra && d.syl.some(s => s.kind === 'initial') &&
+      d.syl.every(s => s.kind === 'ok' || (s.kind === 'initial' && FLAT_CURL[s.a.ini] === s.b.ini && s.a.tone === s.b.tone))) { best = 0.85; heard = raw; break; }
+  }
   if (best < 1 && one.length === 1) {
     const want = stripTones(sylls(item.pinyin)[0] ? sylls(item.pinyin)[0].text : '').toLowerCase();
     const raw = alts.find(r => { const a = [...normZh(r)]; return a.length && a.every(c => INTERJ_PY[c] && stripTones(INTERJ_PY[c]) === want); });
@@ -634,13 +657,21 @@ function speechDiff(item, heardRaw) {
   });
   return { syl, extra };
 }
+const FLAT_CURL = { zh: 'z', ch: 'c', sh: 's', z: 'zh', c: 'ch', s: 'sh' };
+const CURL_HOW = ' — วิธีทำ: ยกปลายลิ้นขึ้นไปใกล้เพดานแข็ง (เลยปุ่มเหงือกไปนิด) ลิ้นไม่แตะฟัน แล้วออกเสียง เสียงจะทุ้มกว่าภาษาไทย';
 const INI_HINT = {
-  zh: 'zh = "จ" แบบม้วนลิ้นขึ้นแตะเพดาน', ch: 'ch = "ช" ม้วนลิ้น + พ่นลมแรง', sh: 'sh = "ซ" ม้วนลิ้น', r: 'r = ม้วนลิ้นคล้าย "ร" ปน "ย" ไม่รัวลิ้น',
-  z: 'z = "จ" ปลายลิ้นแตะหลังฟัน ไม่ม้วน', c: 'c = "ทซ" ปลายลิ้นแตะฟัน + พ่นลม', s: 's = "ซ" ธรรมดา ไม่ม้วนลิ้น',
+  zh: 'zh = "จ" แบบม้วนลิ้น' + CURL_HOW, ch: 'ch = "ช" แบบม้วนลิ้น + พ่นลมแรง' + CURL_HOW, sh: 'sh = "ซ" แบบม้วนลิ้น (ไม่ใช่ ซ/ส ไทย)' + CURL_HOW,
+  r: 'r = ม้วนลิ้นคล้าย "ร" ปน "ย" ไม่รัวลิ้น',
+  z: 'z = "จ" ปลายลิ้นแตะหลังฟันบน ไม่ม้วน', c: 'c = "ทซ" (ไม่ใช่ ช) ปลายลิ้นแตะหลังฟัน แล้วพ่นลมแรงเหมือน ts ใน cats', s: 's = "ซ" ธรรมดา ไม่ม้วนลิ้น',
   j: 'j = "จ" ลิ้นแบน ไม่ม้วน', q: 'q = "ช" ลิ้นแบน + พ่นลมแรง', x: 'x = "ซ" ลิ้นแบน ยิ้มนิด ๆ',
   b: 'b = "ป" ไม่พ่นลม', p: 'p = "พ" พ่นลมแรง', d: 'd = "ต" ไม่พ่นลม', t: 't = "ท" พ่นลมแรง', g: 'g = "ก" ไม่พ่นลม', k: 'k = "ค" พ่นลมแรง',
   h: 'h = "ฮ" ขูดคอนิด ๆ', f: 'f = "ฟ" ฟันบนแตะริมฝีปากล่าง', l: 'l = "ล" ชัด ๆ', n: 'n = "น" ไม่ใช่ "ล"',
 };
+const FIN_HINT = {
+  ui: 'ui (= uei) คือ "อุย" ติดกันในพยางค์เดียว ฟังคล้าย "เวย" สั้น ๆ — อย่าลากเป็นสองพยางค์ "กู่-อี้"',
+  uo: 'uo = "อัว" ห่อปากแล้วเปิดเป็น "โอ" ในพยางค์เดียว', iu: 'iu (= iou) = "อิ่ว" ติดกันในพยางค์เดียว',
+};
+const finHint = fin => FIN_HINT[fin] ? [h('br'), '💡 ' + FIN_HINT[fin]] : null;
 const DIFF_LABEL = { tone: 'วรรณยุกต์', initial: 'พยัญชนะ', final: 'สระ', other: 'คนละคำ', missing: 'ไม่ได้ยิน' };
 function diffLine(s) {
   const P = p => h('b', {}, pyEl(p));
@@ -653,8 +684,12 @@ function diffLine(s) {
       INI_HINT[s.a.ini] ? [h('br'), '💡 ' + INI_HINT[s.a.ini]] : null];
     case 'final': return [P(s.py), ' — สระ/เสียงท้ายผิด: ได้ยินเป็น ', P(s.heardPy), ` ต้องลงท้ายด้วย "${s.a.fin}"`,
       /ng$/.test(s.a.fin) !== /ng$/.test(s.b.fin) ? [h('br'), '💡 -ng = เสียงสะกด "ง" ส่วน -n = สะกด "น" ต้องแยกให้ชัด'] : null,
-      s.a.fin === 'er' ? [h('br'), '💡 èr = "เอ้อ" แล้วม้วนลิ้นขึ้นท้ายเสียง (เหมือน r ภาษาอังกฤษ) ถ้าไม่ม้วนจะเหลือแค่ "เออ"'] : null];
+      s.a.fin === 'er' ? [h('br'), '💡 èr = "เอ้อ" แล้วม้วนลิ้นขึ้นท้ายเสียง (เหมือน r ภาษาอังกฤษ) ถ้าไม่ม้วนจะเหลือแค่ "เออ"'] : null,
+      finHint(s.a.fin)];
     default: return [P(s.py), ' — ระบบได้ยินเป็น ', h('b', { lang: 'zh-CN' }, s.heard), s.heardPy ? [' ', pyEl(s.heardPy)] : null, ' ซึ่งเป็นคนละเสียง ฟังต้นแบบช้า ๆ แล้วลองใหม่',
+      // cài heard as xià: Thai "ไช่" teaches a ch/q sound; name the consonant that has to change.
+      s.a && s.b && s.a.ini !== s.b.ini && /^(zh|ch|sh|r|z|c|s|j|q|x)$/.test(s.a.ini) && INI_HINT[s.a.ini] ? [h('br'), '💡 ' + INI_HINT[s.a.ini]] : null,
+      s.a && s.b && s.a.fin !== s.b.fin ? finHint(s.a.fin) : null,
       // shí/zhī/chī/rì heard as xu/ju/qu: the Thai "อือ" came out with rounded lips and a flat tongue.
       s.a && /^(zh|ch|sh|r)$/.test(s.a.ini) && s.a.fin === 'i' ? [h('br'), `💡 ${s.a.ini}i: ม้วนปลายลิ้นขึ้นไปใกล้เพดาน ปากไม่ห่อ (ยิ้มนิด ๆ) แล้วออกเสียง "อือ" ค้างไว้ — ถ้าห่อปากหรือลิ้นแบนจะกลายเป็น xu / ju`] : null];
   }
@@ -883,28 +918,48 @@ function classifyByTemplate(curve, hasProfile, step) {
   return { tone: +sorted[0][0], margin: sorted[1][1] - sorted[0][1] };
 }
 
-function toneCheck(clip, tones) {
+function toneCheck(clip, tones, pinyin) {
   const A = analyzeClip(clip);
   if (A.voiced < 8) return { reason: 'quiet', diag: A.diag };
   const segs = segmentVoiced(A.frames, tones.length);
   if (!segs) return { reason: 'segments' };
   const f0s = segs.flatMap(s => A.frames.slice(s.start, s.end + 1).map(f => f.f0).filter(Boolean));
   const ref = (S.pitchProfile && S.pitchProfile.medianHz) || median(f0s);
+  const sts = segs.map(s => medianFilter(fixOctaves(A.frames.slice(s.start, s.end + 1).map(f => f.f0).filter(Boolean).map(f => 12 * Math.log2(f / ref))), 5));
+  return judgeTones(sts, tones, pinyin);
+}
+
+// sts: one pitch track per syllable, in semitones around the voice centre.
+function judgeTones(sts, tones, pinyin) {
   const step = ((S.pitchProfile && S.pitchProfile.rangeSt) || 10) / 4;
   const sp = spokenTones(tones);
-  const syl = segs.map((s, i) => {
-    let st = A.frames.slice(s.start, s.end + 1).map(f => f.f0).filter(Boolean).map(f => 12 * Math.log2(f / ref));
-    st = medianFilter(fixOctaves(st), 5);
+  const py = pinyin ? sylls(pinyin) : [];
+  // A word said lower than the "อา" calibration (tired voice, càidān in log 10-31) made every syllable "low",
+  // so a flat tone 1 or a low-starting tone 4 came back as tone 3. With 2+ syllables and no tone 3 in the word,
+  // the word itself is the reference: raise it until its middle sits at the voice centre.
+  if (sts.length > 1 && !sp.some(t => t.tone === 3)) {
+    const mid = median(sts.flat());
+    if (mid < 0) { const up = Math.min(4, -mid); sts = sts.map(st => st.map(v => v + up)); }
+  }
+  const syl = sts.map((st, i) => {
     // Trim the consonant transition at the start, but keep almost all of the end, where tone 4 does its falling.
-    const core = st.slice(Math.floor(st.length * 0.15), st.length - Math.floor(st.length * 0.05));
+    // Unvoiced initials (c, t, sh…) have no transition to trim, and cutting there loses the high start of tone 4.
+    const ini = py[i] ? splitSyl(py[i].text).ini : '';
+    const head = /^[mnlrwy]?$/.test(ini) ? 0.15 : 0.06;
+    const core = st.slice(Math.floor(st.length * head), st.length - Math.floor(st.length * 0.05));
     const curve = bins(core.length ? core : st, 5);
     const target = sp[i];
     if (target.tone === 5) return { target: 5, got: 5, ok: true, raw: st };
     const c = classifyTone(curve, !!S.pitchProfile, step);
     // Tone 3 is above all "low": a calibrated speaker staying well below their centre without a big rise counts.
     const low3 = target.tone === 3 && S.pitchProfile && mean(curve) < -1.5 && curve[4] - curve[0] < 4;
-    const got = low3 ? 3 : c.tone;
-    return { target: target.tone, half: target.half, got, ok: got === target.tone, weak: !low3 && !!c.weak, raw: st, curve };
+    // Tone 4 that drops at least 1.5 semitones and then levels off (no rise after the low point) is still a fall.
+    const mn = Math.min(...curve), imn = curve.indexOf(mn);
+    const drop4 = target.tone === 4 && c.tone !== 4 && imn >= 2 && Math.max(curve[0], curve[1]) - mn >= 1.5 && curve[4] - mn <= 0.5;
+    // Tone 1 drifting down up to 2 semitones (normal at the end of a word) is still level, as long as it isn't low.
+    const flat1 = target.tone === 1 && c.tone !== 1 && Math.max(...curve) - mn <= 2 && mean(curve) >= -1.5;
+    const got = low3 ? 3 : drop4 ? 4 : flat1 ? 1 : c.tone;
+    return { target: target.tone, half: target.half, got, ok: got === target.tone, weak: drop4 || flat1 || (!low3 && !!c.weak), raw: st, curve };
   });
   return { ok: syl.every(r => r.ok), syl, step };
 }
@@ -2407,6 +2462,8 @@ function exSpeak(ex) {
           return done('auto', r);
         }
         sfx('bad');
+        const ch = carrierHint(it);
+        if (ch) diffBox.prepend(ch);
         if (toneErr && !r.toneTrap) {
           status.replaceChildren(h('b', { class: 'bad-t' }, '✕ วรรณยุกต์ผิด: '), 'ระบบได้ยิน ', h('b', { lang: 'zh-CN' }, r.heard), ' — ดูจุดที่ผิดด้านล่าง');
         } else if (r.toneTrap) {
@@ -2571,7 +2628,7 @@ function exToneSpeak(ex) {
         return;
       }
       lastClip = clip;
-      showResult(toneCheck(clip, t.tones));
+      showResult(toneCheck(clip, t.tones, t.pinyin));
       if (!box.querySelector('.mine')) box.append(h('button', { class: 'btn btn-ghost mine', onclick: () => playClip(lastClip) }, '▶ ฟังของฉัน'));
     });
     box.replaceChildren(mic, meter);
