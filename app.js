@@ -128,7 +128,7 @@ addEventListener('pagehide', () => { saveNow(); Log.flush(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) { saveNow(); Log.flush(); } });
 
 // ============================================================ Debug log (ring buffer, kept across sessions → LINE / file)
-const APP_VERSION = '1.13.0';
+const APP_VERSION = '1.14.0';
 const LOG_KEY = 'pandaTalk.log';
 const LOG_MAX = 400;
 const safeJson = v => { try { return JSON.stringify(v); } catch { return String(v); } };
@@ -1086,6 +1086,8 @@ function mixedFor(its, n, pool, { speak = Math.max(2, Math.round(n / 5)), tone =
   return out;
 }
 
+// Extra exercises on top of each stage's base set (learner asked for longer stages; trial value).
+const EXTRA = 5;
 function buildSession(mode, entry) {
   rand = params.has('seed') ? makeRng(+params.get('seed') || 1) : Math.random;
   const q = [];
@@ -1114,6 +1116,15 @@ function buildSession(mode, entry) {
     if (ts || rand() < 0.5) { const t = mkTone(ts); if (t) p2.push(t); }
     q.push(...shuffle(p2));
     const all = news.concat(reviews);
+    // EXTRA: say just-learned words from memory, then mix them with words from earlier days.
+    const olderIds = pick(learnedIds().filter(id => !pool.includes(id) && canSpeak(C.items[id])), 3);
+    const extraPool = all.concat(items(olderIds)), ex = [];
+    for (const it of pick(news.filter(canSpeak), 2)) ex.push(speakOK ? { type: 'speak', item: it, recall: true } : mkMeaning(it, pool));
+    for (const it of shuffle(extraPool).slice(0, EXTRA - ex.length)) {
+      const r = rand();
+      ex.push(it.listenOnly || r < 0.45 ? thenSpeak(mkListen(it, pool.concat(olderIds)), it) : canBuild(it) && r < 0.75 ? mkBuild(it) : mkMeaning(it, pool.concat(olderIds)));
+    }
+    q.push(...shuffle(ex));
     if (all.length >= 4) q.push(mkMatch(all));
     const ttsItem = news.find(toneSpeakable);
     if (ttsItem && Speech.toneAvailable()) q.push(mkToneSpeakItem(ttsItem));
@@ -1122,7 +1133,7 @@ function buildSession(mode, entry) {
     const final = !!entry.lesson.final;
     const ids = final ? uniq(C.units.filter(u => !u.bonus).flatMap(u => u.items)) : entry.unit.items;
     const its = items(ids);
-    q.push(...shuffle(mixedFor(its, entry.lesson.size || 12, ids, { speak: final ? 4 : 3 })));
+    q.push(...shuffle(mixedFor(its, (entry.lesson.size || 12) + EXTRA, ids, { speak: final ? 4 : 3 })));
     if (its.length >= 4) q.push(mkMatch(its));
     if (final) {
       const dialogs = C.units.filter(u => !u.bonus).flatMap(u => u.lessons.flatMap(l => l.dialogs || []));
@@ -1133,9 +1144,9 @@ function buildSession(mode, entry) {
     const units = C.units.filter(u => !u.bonus && (mode === 'mix' ? u.lessons.some(l => isDone(l.id)) : u.day <= entry.upto));
     const pool = mode === 'mix' ? learnedIds() : uniq(units.flatMap(u => u.items));
     const score = id => { const r = S.srs[id]; return (r ? r.box - Math.min(r.wrong, 3) : 0) + rand() * 2.5; };
-    const ids = pool.map(id => [id, score(id)]).sort((a, b) => a[1] - b[1]).slice(0, 14).map(([id]) => id);
+    const ids = pool.map(id => [id, score(id)]).sort((a, b) => a[1] - b[1]).slice(0, 14 + EXTRA).map(([id]) => id);
     const its = items(ids);
-    q.push(...shuffle(mixedFor(its, 14, pool, { speak: 4, recall: 0.5 })));
+    q.push(...shuffle(mixedFor(its, 14 + EXTRA, pool, { speak: 5, recall: 0.5 })));
     if (its.length >= 4) q.push(mkMatch(its));
     const dialogs = units.flatMap(u => u.lessons.flatMap(l => l.dialogs || []));
     for (const d of pick(dialogs, 1)) q.push(...expandDialog(d));
