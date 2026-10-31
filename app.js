@@ -128,7 +128,7 @@ addEventListener('pagehide', () => { saveNow(); Log.flush(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) { saveNow(); Log.flush(); } });
 
 // ============================================================ Debug log (ring buffer, kept across sessions → LINE / file)
-const APP_VERSION = '1.14.0';
+const APP_VERSION = '1.14.1';
 const LOG_KEY = 'pandaTalk.log';
 const LOG_MAX = 400;
 const safeJson = v => { try { return JSON.stringify(v); } catch { return String(v); } };
@@ -779,17 +779,28 @@ function analyzeClip(clip) {
     frames.push({ rms, f0: 0 });
     if (rms > maxRms) maxRms = rms;
   }
-  const gate = Math.max(0.004, maxRms * 0.15), keep = Math.max(0.003, maxRms * 0.06);
+  // Loudness reference = 95th percentile, not the max: one click (the tap on the mic button) used to set the
+  // gate so high that a soft voice fell under it and the take came back "quiet".
+  const sorted = frames.map(fr => fr.rms).sort((a, b) => a - b);
+  const ref = sorted[Math.floor(sorted.length * 0.95)] || maxRms;
+  const gate = Math.max(0.002, ref * 0.15), keep = Math.max(0.0015, ref * 0.06);
+  const voicedN = () => frames.filter(fr => fr.f0 > 0).length;
+  // 50 Hz floor: a low male tone 3 (mǎi, jǐ) dips into creak well under 70 Hz.
   // Hysteresis: once voiced, keep tracking down to a lower level, so the quiet falling tail of tone 4 isn't cut off.
   let on = false;
   frames.forEach((fr, i) => {
-    if (fr.rms >= gate || (on && fr.rms >= keep)) fr.f0 = yin(x, sr, i * hop, size);
+    if (fr.rms >= gate || (on && fr.rms >= keep)) fr.f0 = yin(x, sr, i * hop, size, 50);
     on = fr.f0 > 0;
   });
-  // Buzzy vowels (shì, zhè, cì) are not periodic enough for the strict threshold: retry looser.
-  if (frames.filter(fr => fr.f0 > 0).length < 12)
-    frames.forEach((fr, i) => { if (!fr.f0 && fr.rms >= keep) fr.f0 = yin(x, sr, i * hop, size, 70, 500, 0.3); });
-  return { frames, voiced: frames.filter(fr => fr.f0 > 0).length, maxRms };
+  const passes = [voicedN()];
+  // Buzzy vowels (shì, zhè, cì) and creaky low tones are not periodic enough for the strict threshold: retry looser.
+  for (const thr of [0.3, 0.45]) {
+    if (voicedN() >= 12) break;
+    frames.forEach((fr, i) => { if (!fr.f0 && fr.rms >= keep) fr.f0 = yin(x, sr, i * hop, size, 50, 500, thr); });
+    passes.push(voicedN());
+  }
+  const diag = `len=${(n / sr).toFixed(1)}s max=${maxRms.toFixed(3)} p95=${ref.toFixed(3)} loud=${frames.filter(fr => fr.rms >= gate).length}/${frames.length} pitch=${passes.join('>')}`;
+  return { frames, voiced: voicedN(), maxRms, diag };
 }
 
 function segmentVoiced(frames, n) {
@@ -874,7 +885,7 @@ function classifyByTemplate(curve, hasProfile, step) {
 
 function toneCheck(clip, tones) {
   const A = analyzeClip(clip);
-  if (A.voiced < 8) return { reason: 'quiet' };
+  if (A.voiced < 8) return { reason: 'quiet', diag: A.diag };
   const segs = segmentVoiced(A.frames, tones.length);
   if (!segs) return { reason: 'segments' };
   const f0s = segs.flatMap(s => A.frames.slice(s.start, s.end + 1).map(f => f.f0).filter(Boolean));
@@ -2511,7 +2522,7 @@ function exToneSpeak(ex) {
 
   const showResult = r => {
     // full pitch track (every 2nd frame) so a log shows whether e.g. the end of a tone-4 fall was captured
-    logI('tone', `${t.pinyin} → ${r.reason || r.syl.map(s => `${s.target}:${s.got}${s.weak ? 'w' : ''}` + (s.curve ? ` [${s.curve.map(v => v.toFixed(1)).join(',')}]` +
+    logI('tone', `${t.pinyin} → ${r.reason ? r.reason + (r.diag ? ' ' + r.diag : '') : r.syl.map(s => `${s.target}:${s.got}${s.weak ? 'w' : ''}` + (s.curve ? ` [${s.curve.map(v => v.toFixed(1)).join(',')}]` +
       ` raw(${s.raw.filter((_, j) => j % 2 === 0).map(v => v.toFixed(0)).join(',')})` : '')).join(' ')}`);
     if (r.reason) {
       res.replaceChildren();
