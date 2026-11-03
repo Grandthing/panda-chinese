@@ -128,7 +128,7 @@ addEventListener('pagehide', () => { saveNow(); Log.flush(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) { saveNow(); Log.flush(); } });
 
 // ============================================================ Debug log (ring buffer, kept across sessions → LINE / file)
-const APP_VERSION = '1.15.0';
+const APP_VERSION = '1.15.1';
 const LOG_KEY = 'pandaTalk.log';
 const LOG_MAX = 400;
 const safeJson = v => { try { return JSON.stringify(v); } catch { return String(v); } };
@@ -711,10 +711,25 @@ function diffView(item, heard) {
 
 // ============================================================ Recorder (getUserMedia → Float32 samples)
 // autoStop: end ~0.7 s after the speaker goes quiet (once some speech was heard) instead of waiting for maxMs.
+// iOS leaves the AudioContext "interrupted" after speech recognition has used the mic (log 11-02: zhǎoqián
+// recorded 0.0 s twice right after a speak exercise). Resume it, or start a fresh one if it won't come back.
+async function liveCtx(fresh) {
+  const wait = (p, ms) => Promise.race([p.catch(() => {}), new Promise(r => setTimeout(r, ms))]);
+  let ctx = audioCtx();
+  if (ctx && !fresh && ctx.state !== 'running') await wait(ctx.resume(), 400);
+  if (ctx && (fresh || ctx.state !== 'running')) {
+    logW('mic', `AudioContext ${ctx.state} → สร้างใหม่`);
+    try { ctx.close(); } catch {}
+    actx = null;
+    ctx = audioCtx();
+    if (ctx.state !== 'running') await wait(ctx.resume(), 400);
+  }
+  return ctx;
+}
 function startRecording(maxMs, onLevel, { autoStop = false } = {}) {
   const ctl = { stop: () => { ctl.stopRequested = true; } };
   ctl.promise = (async () => {
-    const ctx = audioCtx();
+    let ctx = await liveCtx();
     let stream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: false } });
@@ -723,21 +738,22 @@ function startRecording(maxMs, onLevel, { autoStop = false } = {}) {
       logW('mic', 'getUserMedia ' + errText(e));
       throw e;
     }
-    const src = ctx.createMediaStreamSource(stream);
-    const proc = ctx.createScriptProcessor(2048, 1, 1);
-    const mute = ctx.createGain();
-    mute.gain.value = 0;
+    let src, proc, mute;
     const chunks = [];
     return new Promise(resolve => {
-      let done = false, t = 0;
+      let done = false, t = 0, dog = 0;
+      const unwire = () => {
+        if (proc) proc.onaudioprocess = null;
+        try { src.disconnect(); proc.disconnect(); mute.disconnect(); } catch {}
+      };
       const stop = () => {
         if (done) return;
-        done = true; clearTimeout(t);
-        proc.onaudioprocess = null;
-        try { src.disconnect(); proc.disconnect(); mute.disconnect(); } catch {}
+        done = true; clearTimeout(t); clearTimeout(dog);
+        unwire();
         stream.getTracks().forEach(tr => tr.stop());
         let len = 0;
         for (const c of chunks) len += c.length;
+        if (!len) logW('mic', `อัดได้ 0 วินาที (AudioContext ${ctx.state})`);
         const out = new Float32Array(len);
         let o = 0;
         for (const c of chunks) { out.set(c, o); o += c.length; }
@@ -745,7 +761,7 @@ function startRecording(maxMs, onLevel, { autoStop = false } = {}) {
       };
       const dt = 2048 / ctx.sampleRate;
       let noise = Infinity, voiced = 0, quiet = 0;
-      proc.onaudioprocess = e => {
+      const onAudio = e => {
         const d = e.inputBuffer.getChannelData(0);
         chunks.push(new Float32Array(d));
         let s = 0;
@@ -757,7 +773,22 @@ function startRecording(maxMs, onLevel, { autoStop = false } = {}) {
         if (lvl > Math.max(0.015, noise * 4)) { voiced += dt; quiet = 0; }
         else if (voiced > 0.2 && (quiet += dt) > 0.7) setTimeout(stop, 0);
       };
-      src.connect(proc); proc.connect(mute); mute.connect(ctx.destination);
+      const wire = () => {
+        src = ctx.createMediaStreamSource(stream);
+        proc = ctx.createScriptProcessor(2048, 1, 1);
+        mute = ctx.createGain();
+        mute.gain.value = 0;
+        proc.onaudioprocess = onAudio;
+        src.connect(proc); proc.connect(mute); mute.connect(ctx.destination);
+      };
+      wire();
+      // No audio after 0.8 s = the context is stuck: rebuild it once on the same mic stream.
+      dog = setTimeout(async () => {
+        if (done || chunks.length) return;
+        unwire();
+        ctx = await liveCtx(true);
+        if (!done) wire();
+      }, 800);
       t = setTimeout(stop, maxMs);
       ctl.stop = stop;
       if (ctl.stopRequested) setTimeout(stop, 0);
@@ -952,7 +983,11 @@ function judgeTones(sts, tones, pinyin) {
     if (target.tone === 5) return { target: 5, got: 5, ok: true, raw: st };
     const c = classifyTone(curve, !!S.pitchProfile, step);
     // Tone 3 is above all "low": a calibrated speaker staying well below their centre without a big rise counts.
-    const low3 = target.tone === 3 && S.pitchProfile && mean(curve) < -1.5 && curve[4] - curve[0] < 4;
+    // So does the everyday "half" tone 3 at the end of a word (21: from mid down to low, no rise), e.g. suǒ in
+    // cèsuǒ — as long as it doesn't start high like a tone 4.
+    const half3 = Math.max(curve[0], curve[1]) <= 2 && curve[4] <= -2 && Math.min(...curve) === curve[4] &&
+      (i === 0 || curve[0] < Math.max(...sts[i - 1]) - 3);
+    const low3 = target.tone === 3 && S.pitchProfile && ((mean(curve) < -1.5 && curve[4] - curve[0] < 4) || half3);
     // Tone 4 that drops at least 1.5 semitones and then levels off (no rise after the low point) is still a fall.
     const mn = Math.min(...curve), imn = curve.indexOf(mn);
     const drop4 = target.tone === 4 && c.tone !== 4 && imn >= 2 && Math.max(curve[0], curve[1]) - mn >= 1.5 && curve[4] - mn <= 0.5;
