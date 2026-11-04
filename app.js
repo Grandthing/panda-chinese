@@ -128,7 +128,7 @@ addEventListener('pagehide', () => { saveNow(); Log.flush(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) { saveNow(); Log.flush(); } });
 
 // ============================================================ Debug log (ring buffer, kept across sessions → LINE / file)
-const APP_VERSION = '1.16.0';
+const APP_VERSION = '1.17.0';
 const LOG_KEY = 'pandaTalk.log';
 const LOG_MAX = 400;
 const safeJson = v => { try { return JSON.stringify(v); } catch { return String(v); } };
@@ -415,7 +415,7 @@ const Rec = {
     const el = this.el || (this.el = new Audio());
     el.src = src;
     el.preservesPitch = el.webkitPreservesPitch = true;
-    el.defaultPlaybackRate = el.playbackRate = slow ? 0.7 : 1;
+    el.defaultPlaybackRate = el.playbackRate = slow === 'fast' ? FAST_RATE : slow ? 0.7 : 1;
     el.onended = () => finish();
     el.onerror = () => finish();
     setTimeout(finish, 10000);
@@ -427,17 +427,21 @@ function stopAudio() {
   Rec.stop();
   if (TTS.supported && (speechSynthesis.speaking || speechSynthesis.pending)) speechSynthesis.cancel();
 }
+// slow: true = 🐢, 'fast' = ⚡ (real people in a shop talk about this fast, and run the words together).
+const FAST_RATE = 1.4;
 function play(it, slow = false) {
   const text = speakText(it);
   const url = Rec.usable() && Rec.url(text, Rec.voice());
-  if (!url) return TTS.speak(text, slow ? 0.6 : undefined);
+  const ttsRate = slow === 'fast' ? Math.min(2, (S.settings.ttsRate || 0.9) * FAST_RATE) : slow ? 0.6 : undefined;
+  if (!url) return TTS.speak(text, ttsRate);
   if (TTS.supported && (speechSynthesis.speaking || speechSynthesis.pending)) speechSynthesis.cancel();
   return Rec.play(url, slow).catch(e => {
     if (e && e.name === 'AbortError') return; // a newer sound took over; don't speak this one with the device voice too
     logW('audio', `เล่น ${url} ไม่ได้: ${errText(e)} → ใช้เสียงเครื่อง`);
-    return TTS.speak(text, slow ? 0.6 : undefined);
+    return TTS.speak(text, ttsRate);
   });
 }
+const fastBtn = it => h('button', { class: 'btn-play fast', 'aria-label': 'ฟังเร็วแบบคนจริง', onclick: () => play(it, 'fast') }, '⚡');
 
 // ============================================================ Speech recognition (+ fallback levels)
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -1171,8 +1175,15 @@ function mkToneSpeakSet(ts) {
   const i = Math.floor(rand() * ts.hanzi.length);
   return { type: 'tone_speak', target: { hanzi: ts.hanzi[i], pinyin: ts.pinyin[i], thai: ts.thai[i], meaning: ts.meaning[i], tones: sylls(ts.pinyin[i]).map(s => s.tone) } };
 }
+// Each reply is two steps: first hear what the local said and pick its meaning (nothing written),
+// then pick the reply by pinyin alone and say it out loud.
 function expandDialog(d) {
-  return d.lines.map((ln, i) => (ln.who === 'me' && C.items[ln.answer] ? { type: 'dialog', dialog: d, upto: i } : null)).filter(Boolean);
+  return d.lines.flatMap((ln, i) => {
+    if (ln.who !== 'me' || !C.items[ln.answer]) return [];
+    const prev = d.lines[i - 1];
+    const heard = prev && prev.who === 'npc' && C.items[prev.item] ? [{ type: 'dialog', dialog: d, upto: i, listen: true }] : [];
+    return [...heard, { type: 'dialog', dialog: d, upto: i }];
+  });
 }
 const items = ids => ids.map(id => C.items[id]).filter(it => it && !it.npc);
 
@@ -1221,11 +1232,13 @@ function buildSession(mode, entry) {
     if (ts || rand() < 0.5) { const t = mkTone(ts); if (t) p2.push(t); }
     q.push(...shuffle(p2));
     const all = news.concat(reviews);
-    // EXTRA: say just-learned words from memory, then mix them with words from earlier days.
+    // EXTRA: say from memory the words just learned and 3 from earlier days (learner asked for many of these),
+    // then mix them with the rest.
     const olderIds = pick(learnedIds().filter(id => !pool.includes(id) && canSpeak(C.items[id])), 3);
     const extraPool = all.concat(items(olderIds)), ex = [];
-    for (const it of pick(news.filter(canSpeak), 2)) ex.push(speakOK ? { type: 'speak', item: it, recall: true } : mkMeaning(it, pool));
-    for (const it of shuffle(extraPool).slice(0, EXTRA - ex.length)) {
+    for (const it of pick(news.filter(canSpeak), 3)) ex.push(speakOK ? { type: 'speak', item: it, recall: true } : mkMeaning(it, pool));
+    if (speakOK) for (const it of items(olderIds).concat(pick(reviews.filter(canSpeak), news.length ? 0 : 3))) ex.push({ type: 'speak', item: it, recall: true });
+    for (const it of shuffle(extraPool).slice(0, Math.max(2, EXTRA - ex.length))) {
       const r = rand();
       ex.push(it.listenOnly || r < 0.45 ? thenSpeak(mkListen(it, pool.concat(olderIds)), it) : canBuild(it) && r < 0.75 ? mkBuild(it) : mkMeaning(it, pool.concat(olderIds)));
     }
@@ -1238,7 +1251,7 @@ function buildSession(mode, entry) {
     const final = !!entry.lesson.final;
     const ids = final ? uniq(C.units.filter(u => !u.bonus).flatMap(u => u.items)) : entry.unit.items;
     const its = items(ids);
-    q.push(...shuffle(mixedFor(its, (entry.lesson.size || 12) + EXTRA, ids, { speak: final ? 4 : 3 })));
+    q.push(...shuffle(mixedFor(its, (entry.lesson.size || 12) + EXTRA, ids, { speak: final ? 7 : 6, recall: 0.75 })));
     if (its.length >= 4) q.push(mkMatch(its));
     if (final) {
       const dialogs = C.units.filter(u => !u.bonus).flatMap(u => u.lessons.flatMap(l => l.dialogs || []));
@@ -1251,7 +1264,7 @@ function buildSession(mode, entry) {
     const score = id => { const r = S.srs[id]; return (r ? r.box - Math.min(r.wrong, 3) : 0) + rand() * 2.5; };
     const ids = pool.map(id => [id, score(id)]).sort((a, b) => a[1] - b[1]).slice(0, 14 + EXTRA).map(([id]) => id);
     const its = items(ids);
-    q.push(...shuffle(mixedFor(its, 14 + EXTRA, pool, { speak: 5, recall: 0.5 })));
+    q.push(...shuffle(mixedFor(its, 14 + EXTRA, pool, { speak: 8, recall: 0.8 })));
     if (its.length >= 4) q.push(mkMatch(its));
     const dialogs = units.flatMap(u => u.lessons.flatMap(l => l.dialogs || []));
     for (const d of pick(dialogs, 1)) q.push(...expandDialog(d));
@@ -1386,7 +1399,7 @@ function toneShapes(tones) {
 function playBtns(it) {
   return h('div', { class: 'play-row' },
     h('button', { class: 'btn-play', 'aria-label': 'ฟังเสียง', onclick: () => play(it) }, '🔊'),
-    h('button', { class: 'btn-play slow', 'aria-label': 'ฟังช้า', onclick: () => play(it, true) }, '🐢'));
+    h('button', { class: 'btn-play slow', 'aria-label': 'ฟังช้า', onclick: () => play(it, true) }, '🐢'), fastBtn(it));
 }
 // 十四 → [shí สิบ][sì สี่]; 这个多少钱 → [zhège อันนี้][duōshao เท่าไหร่][qián เงิน]. Longest known word first.
 // null for a single word (one character, or a glossary word marked "=" like 咖啡 / 便宜), or when the
@@ -2308,7 +2321,7 @@ function exListen(ex) {
   enable = checkFlow(list.get, sel => sel === it.id, it, [it.id]);
   return h('div', { class: 'ex' }, prompt('ฟังแล้วเลือกความหมาย'),
     h('div', { class: 'big-play' }, h('button', { class: 'btn-speaker', 'aria-label': 'ฟังอีกครั้ง', onclick: () => play(it) }, '🔊'),
-      h('button', { class: 'btn-play slow', 'aria-label': 'ฟังช้า', onclick: () => play(it, true) }, '🐢')),
+      h('button', { class: 'btn-play slow', 'aria-label': 'ฟังช้า', onclick: () => play(it, true) }, '🐢'), fastBtn(it)),
     list.wrap);
 }
 
@@ -2320,7 +2333,7 @@ function exNum(ex) {
   enable = checkFlow(list.get, sel => sel === it, ln, []);
   return h('div', { class: 'ex' }, h('div', { class: 'tag' }, `${it.set.icon} ${it.set.title}`), prompt('ฟังแล้วเลือก: ' + it.set.ask),
     h('div', { class: 'big-play' }, h('button', { class: 'btn-speaker', 'aria-label': 'ฟังอีกครั้ง', onclick: () => play(ln) }, '🔊'),
-      h('button', { class: 'btn-play slow', 'aria-label': 'ฟังช้า', onclick: () => play(ln, true) }, '🐢')),
+      h('button', { class: 'btn-play slow', 'aria-label': 'ฟังช้า', onclick: () => play(ln, true) }, '🐢'), fastBtn(ln)),
     list.wrap);
 }
 
@@ -2332,7 +2345,7 @@ function exTalk(ex) {
   enable = checkFlow(list.get, sel => sel === it, it, []);
   return h('div', { class: 'ex' }, h('div', { class: 'tag' }, `${it.set.icon} ${it.set.title}`), prompt('ฟังแล้วเลือกความหมาย'),
     h('div', { class: 'big-play' }, h('button', { class: 'btn-speaker', 'aria-label': 'ฟังอีกครั้ง', onclick: () => play(it) }, '🔊'),
-      h('button', { class: 'btn-play slow', 'aria-label': 'ฟังช้า', onclick: () => play(it, true) }, '🐢')),
+      h('button', { class: 'btn-play slow', 'aria-label': 'ฟังช้า', onclick: () => play(it, true) }, '🐢'), fastBtn(it)),
     list.wrap);
 }
 
@@ -2380,7 +2393,7 @@ function exTone(ex) {
   enable = checkFlow(list.get, sel => sel === a, target, []);
   return h('div', { class: 'ex' }, prompt('ได้ยินวรรณยุกต์ไหน?'),
     h('div', { class: 'big-play' }, h('button', { class: 'btn-speaker', 'aria-label': 'ฟังอีกครั้ง', onclick: () => play(target) }, '🔊'),
-      h('button', { class: 'btn-play slow', 'aria-label': 'ฟังช้า', onclick: () => play(target, true) }, '🐢')),
+      h('button', { class: 'btn-play slow', 'aria-label': 'ฟังช้า', onclick: () => play(target, true) }, '🐢'), fastBtn(target)),
     list.wrap);
 }
 
@@ -2428,8 +2441,18 @@ function bubble(who, it) {
       h('div', { class: 'msg-mean' }, it.meaning),
       h('button', { class: 'btn-play small', 'aria-label': 'ฟังเสียง', onclick: () => play(it) }, '🔊')));
 }
+// The local's line while you're still listening: sound only, no pinyin or meaning.
+function hiddenBubble(it) {
+  return h('div', { class: 'msg npc' }, panda('hi', 40),
+    h('div', { class: 'msg-b hidden-line' }, h('div', { class: 'muted' }, '👂 ฟังให้ดี…'),
+      h('div', { class: 'play-row' },
+        h('button', { class: 'btn-play small', 'aria-label': 'ฟังเสียง', onclick: () => play(it) }, '🔊'),
+        h('button', { class: 'btn-play small slow', 'aria-label': 'ฟังช้า', onclick: () => play(it, true) }, '🐢'),
+        h('button', { class: 'btn-play small fast', 'aria-label': 'ฟังเร็วแบบคนจริง', onclick: () => play(it, 'fast') }, '⚡'))));
+}
 function exDialog(ex) {
   const d = ex.dialog, lines = d.lines, k = ex.upto;
+  const listen = !!ex.listen, heardAt = listen ? k - 1 : -1;
   const chat = h('div', { class: 'chat' });
   if (d.scene) chat.append(h('div', { class: 'scene' }, '🎬 ' + d.scene));
   let lastMe = -1;
@@ -2439,20 +2462,50 @@ function exDialog(ex) {
     const ln = lines[i];
     const it = C.items[ln.who === 'npc' ? ln.item : ln.answer];
     if (!it) continue;
-    chat.append(bubble(ln.who, it));
-    if (ln.who === 'npc' && i > lastMe) toPlay.push(it);
+    chat.append(i === heardAt ? hiddenBubble(it) : bubble(ln.who, it));
+    // The reply step comes right after hearing the line: don't play it a second time.
+    if (ln.who === 'npc' && i > lastMe && !(L.queue[L.i - 1] && L.queue[L.i - 1].listen && L.queue[L.i - 1].dialog === d)) toPlay.push(it);
   }
+  (async () => { await new Promise(r => setTimeout(r, 300)); for (const it of toPlay) { if (!L || L.queue[L.i] !== ex) return; await play(it); } })();
+  let enable;
+  if (listen) {
+    // 1) What did they say? Choices are meanings of other things locals say in the course.
+    const said = C.items[lines[heardAt].item];
+    const others = shuffle(Object.values(C.items).filter(o => o.npc && o.id !== said.id && o.meaning !== said.meaning)).slice(0, 3);
+    const opts = shuffle([said, ...others]);
+    const list = choiceList(opts, o => h('div', { class: 'opt-th' }, o.meaning), () => enable());
+    enable = checkFlow(list.get, sel => sel === said, said, []);
+    setTimeout(() => list.wrap.scrollIntoView({ block: 'end', behavior: 'smooth' }), 350);
+    return h('div', { class: 'ex' }, prompt('คนจีนพูดว่าอะไร?'), chat, list.wrap);
+  }
+  // 2) Reply: the situation in Thai, choices in pinyin only (💡 shows the Thai), then say it.
   const cur = lines[k];
   if (cur.cue) chat.append(h('div', { class: 'cue' }, '👉 ' + cur.cue));
   const answer = C.items[cur.answer];
-  (async () => { await new Promise(r => setTimeout(r, 300)); for (const it of toPlay) { if (!L || L.queue[L.i] !== ex) return; await play(it); } })();
-  let enable;
+  // Hints: Thai reading first (if shown in settings), then the meaning.
+  const steps = S.settings.showThai ? 2 : 1;
+  let hints = 0;
   const opts = shuffle([cur.answer, ...(cur.distractors || [])].filter(id => C.items[id]));
-  const list = choiceList(opts, id => { const o = C.items[id]; return [h('div', { class: 'opt-py' }, pyEl(o.pinyin)), h('div', { class: 'opt-th' }, (S.settings.showThai ? o.thai + ' · ' : '') + o.meaning)]; }, () => enable());
+  const optEl = id => {
+    const o = C.items[id];
+    return [h('div', { class: 'opt-py' }, pyEl(o.pinyin)),
+      steps === 2 && hints >= 1 ? h('div', { class: 'opt-th' }, o.thai) : null,
+      hints >= steps ? h('div', { class: 'opt-th' }, o.meaning) : null].filter(Boolean);
+  };
+  const list = choiceList(opts, optEl, id => { play(C.items[id]); enable(); });
+  const hintBtn = h('button', { class: 'btn btn-ghost small', onclick: () => {
+    hints++;
+    list.wrap.querySelectorAll('.opt').forEach((b, i) => b.replaceChildren(...optEl(opts[i])));
+    hintBtn.textContent = `💡 ใบ้ (${hints}/${steps})`;
+    hintBtn.disabled = hints >= steps;
+  } }, `💡 ใบ้ (0/${steps})`);
+  const dex = L.queue[L.i];
+  if (Speech.level() !== 'off' && canSpeak(answer)) { dex.thenSpeak = true; dex.must = true; }
   enable = checkFlow(list.get, sel => sel === cur.answer, answer, [cur.answer]);
   // Long conversations push the answers below the fold; bring them into thumb reach.
   setTimeout(() => list.wrap.scrollIntoView({ block: 'end', behavior: 'smooth' }), 350);
-  return h('div', { class: 'ex' }, prompt('ตอบให้เหมาะกับสถานการณ์'), chat, list.wrap);
+  return h('div', { class: 'ex' }, prompt('ตอบให้เหมาะกับสถานการณ์ แล้วพูดออกมา'), chat,
+    h('p', { class: 'muted small' }, 'แตะตัวเลือกเพื่อฟังเสียง · ติดได้กด 💡'), list.wrap, h('div', { class: 'play-row' }, hintBtn));
 }
 
 function micButton(label, onclick) {

@@ -441,6 +441,10 @@ input, textarea, select { -webkit-user-select: text; user-select: text; -webkit-
 .msg-th { color: var(--muted); font-size: 14px; }
 .msg-mean { font-size: 14px; }
 .msg-b .btn-play { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); }
+/* the local's line before you've answered what it means: sound buttons only */
+.msg-b.hidden-line { padding-right: 12px; }
+.msg-b.hidden-line .play-row { justify-content: flex-start; gap: 8px; margin: 6px 0 0; }
+.msg-b.hidden-line .btn-play { position: static; transform: none; }
 
 .speak-box { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-top: 16px; }
 .mic {
