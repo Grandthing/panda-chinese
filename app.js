@@ -128,7 +128,7 @@ addEventListener('pagehide', () => { saveNow(); Log.flush(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) { saveNow(); Log.flush(); } });
 
 // ============================================================ Debug log (ring buffer, kept across sessions → LINE / file)
-const APP_VERSION = '1.17.0';
+const APP_VERSION = '1.17.1';
 const LOG_KEY = 'pandaTalk.log';
 const LOG_MAX = 400;
 const safeJson = v => { try { return JSON.stringify(v); } catch { return String(v); } };
@@ -584,7 +584,12 @@ function scoreSpeech(item, alts) {
       if (r) { toneTrap = r; heard = raw; best = Math.min(best, 0.4); break; }
     }
   }
-  return { best, heard, toneTrap };
+  let ctx = false;
+  if (best < 1 && !toneTrap && one.length > 1) {
+    const raw = alts.find(r => contextOK(contextScore(item, r)));
+    if (raw) { ctx = true; heard = raw; best = Math.max(best, 0.8); }
+  }
+  return { best, heard, toneTrap, ctx };
 }
 function lookupHanzi(hz) {
   for (const it of Object.values(C.items)) if (normZh(it.hanzi) === hz) return { pinyin: it.pinyin, meaning: it.meaning };
@@ -663,6 +668,40 @@ function speechDiff(item, heardRaw) {
   });
   return { syl, extra };
 }
+// "Would a Chinese person get it from context?" The recogniser has no context, a taxi driver does: in a
+// phrase, a listener copes with a consonant from the same family (z/zh/j, c/ch/q, s/sh/x), a close final
+// (-n/-ng, ou/iu) or one wrong tone, as long as every syllable is there and no syllable is something else.
+// Never used for one-syllable words (买/卖 is exactly what context can't fix) or when a tone trap was heard.
+const INI_FAMILY = { z: 'z', zh: 'z', j: 'z', c: 'c', ch: 'c', q: 'c', s: 's', sh: 's', x: 's' };
+const FIN_NEAR = [['an', 'ang'], ['en', 'eng'], ['in', 'ing'], ['ian', 'iang'], ['uan', 'uang'], ['ou', 'iu'], ['uo', 'o'], ['u', 'uo'], ['ao', 'iao'], ['u', 'ü'], ['e', 'ei']];
+function sylLike(a, b) {
+  const ini = a.ini === b.ini ? 1 : INI_FAMILY[a.ini] && INI_FAMILY[a.ini] === INI_FAMILY[b.ini] ? 0.7 : 0;
+  const fin = a.fin === b.fin ? 1 : FIN_NEAR.some(([x, y]) => (a.fin === x && b.fin === y) || (a.fin === y && b.fin === x)) ? 0.6 : 0;
+  const tone = a.tone === 5 || a.tone === b.tone ? 1 : 0;
+  return 0.3 * ini + 0.4 * fin + 0.3 * tone;
+}
+function contextScore(item, heardRaw) {
+  const tc = [...normZh(item.hanzi)], ts = sylls(item.pinyin), hc = [...normZh(heardRaw)];
+  if (tc.length < 2 || tc.length !== ts.length || !hc.length) return null;
+  const map = charPy();
+  const spoken = spokenTones(ts.map(s => s.tone));
+  const want = ts.map((s, i) => splitSyl(retone(s.text.toLowerCase(), spoken[i].tone)));
+  const got = hc.map(c => (map[c] ? splitSyl(map[c]) : null));
+  const sim = (i, j) => (tc[i] === hc[j] ? 1 : got[j] ? sylLike(want[i], got[j]) : 0);
+  // Best alignment: every target syllable matched to a heard one in order; extra heard syllables are skipped.
+  const n = tc.length, m = hc.length;
+  const B = Array.from({ length: n + 1 }, () => Array(m + 1).fill(-Infinity));
+  for (let j = 0; j <= m; j++) B[0][j] = 0;
+  for (let i = 1; i <= n; i++) for (let j = 1; j <= m; j++) B[i][j] = Math.max(B[i][j - 1], B[i - 1][j - 1] + sim(i - 1, j - 1));
+  if (B[n][m] === -Infinity) return null;
+  const per = [];
+  for (let i = n, j = m; i > 0;) {
+    if (j > i && B[i][j] === B[i][j - 1]) { j--; continue; }
+    per.unshift(sim(i - 1, j - 1)); i--; j--;
+  }
+  return { avg: per.reduce((a, b) => a + b, 0) / n, min: Math.min(...per), extra: m - n };
+}
+const contextOK = c => !!c && c.avg >= 0.75 && c.min >= 0.55 && c.extra <= 1;
 const FLAT_CURL = { zh: 'z', ch: 'c', sh: 's', z: 'zh', c: 'ch', s: 'sh' };
 const CURL_HOW = ' — วิธีทำ: ยกปลายลิ้นขึ้นไปใกล้เพดานแข็ง (เลยปุ่มเหงือกไปนิด) ลิ้นไม่แตะฟัน แล้วออกเสียง เสียงจะทุ้มกว่าภาษาไทย';
 const INI_HINT = {
@@ -2589,15 +2628,16 @@ function exSpeak(ex) {
         attempts++;
         const dv = r.best < 1 ? diffView(it, r.heard) : null;
         const dd = speechDiff(it, r.heard);
-        logI('sr', `${it.id} ได้ยิน [${alts.join(' / ')}] score=${r.best.toFixed(2)}${r.toneTrap ? ' trap=' + r.toneTrap : ''}` +
+        logI('sr', `${it.id} ได้ยิน [${alts.join(' / ')}] score=${r.best.toFixed(2)}${r.toneTrap ? ' trap=' + r.toneTrap : ''}${r.ctx ? ' ctx' : ''}` +
           (dd ? ' diff=' + dd.syl.map(s => s.kind === 'ok' ? '✓' : s.kind + (s.heardPy ? ':' + s.heardPy : '')).join(',') : '') + ` ${Date.now() - t0}ms`);
         diffBox.replaceChildren(dv || '');
         if (dv) setTimeout(() => diffBox.scrollIntoView({ block: 'nearest', behavior: 'smooth' }), 50);
         // A wrong tone changes the word for a native listener, so it never passes as "close enough".
         const toneErr = !!dv && dd.syl.some(s => s.kind === 'tone');
         // A long sentence must be mostly right; a short word passes once it's recognisable.
-        if (r.best >= (recall ? 0.8 : normZh(it.hanzi).length >= 6 ? 0.75 : 0.5) && !toneErr) {
-          if (dv) status.replaceChildren('ผ่าน แต่ยังมีจุดที่ควรแก้ 👇');
+        if ((r.best >= (recall ? 0.8 : normZh(it.hanzi).length >= 6 ? 0.75 : 0.5) && !toneErr) || r.ctx) {
+          if (r.ctx) status.replaceChildren('ผ่าน ✓ คนจีนน่าจะฟังออกจากบริบท — แต่ถ้าแก้จุดด้านล่างจะชัดขึ้น 👇');
+          else if (dv) status.replaceChildren('ผ่าน แต่ยังมีจุดที่ควรแก้ 👇');
           return done('auto', r);
         }
         sfx('bad');
