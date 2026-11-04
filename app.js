@@ -128,7 +128,7 @@ addEventListener('pagehide', () => { saveNow(); Log.flush(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) { saveNow(); Log.flush(); } });
 
 // ============================================================ Debug log (ring buffer, kept across sessions → LINE / file)
-const APP_VERSION = '1.17.1';
+const APP_VERSION = '1.17.2';
 const LOG_KEY = 'pandaTalk.log';
 const LOG_MAX = 400;
 const safeJson = v => { try { return JSON.stringify(v); } catch { return String(v); } };
@@ -2322,7 +2322,7 @@ function checkFlow(getSel, isOk, info, srsIds) {
     const ok = isOk(getSel());
     grade(ex, ok, srsIds);
     lockOptions();
-    if (ok && ex.thenSpeak) {
+    if (ok && ex.thenSpeak && ex.item) {
       L.queue.splice(L.i + 1, 0, { type: 'speak', item: ex.item, must: ex.must, follow: true, uid: L.nextUid++ });
       feedback(ok, info, { title: 'ถูก! ต่อไปพูดออกเสียง 🎙️' });
     } else feedback(ok, info);
@@ -2539,7 +2539,7 @@ function exDialog(ex) {
     hintBtn.disabled = hints >= steps;
   } }, `💡 ใบ้ (0/${steps})`);
   const dex = L.queue[L.i];
-  if (Speech.level() !== 'off' && canSpeak(answer)) { dex.thenSpeak = true; dex.must = true; }
+  if (Speech.level() !== 'off' && canSpeak(answer)) { dex.thenSpeak = true; dex.must = true; dex.item = answer; }
   enable = checkFlow(list.get, sel => sel === cur.answer, answer, [cur.answer]);
   // Long conversations push the answers below the fold; bring them into thumb reach.
   setTimeout(() => list.wrap.scrollIntoView({ block: 'end', behavior: 'smooth' }), 350);
