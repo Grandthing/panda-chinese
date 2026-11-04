@@ -128,7 +128,7 @@ addEventListener('pagehide', () => { saveNow(); Log.flush(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) { saveNow(); Log.flush(); } });
 
 // ============================================================ Debug log (ring buffer, kept across sessions → LINE / file)
-const APP_VERSION = '1.15.2';
+const APP_VERSION = '1.16.0';
 const LOG_KEY = 'pandaTalk.log';
 const LOG_MAX = 400;
 const safeJson = v => { try { return JSON.stringify(v); } catch { return String(v); } };
@@ -185,6 +185,8 @@ async function loadContent() {
   // Long shop / food / snack sentences (tools/make_sentences.py), unlocked once all their words were learned.
   C.sentSets = await fetch('content/sentences.json').then(r => r.ok ? r.json() : { sets: [] }).then(d => d.sets || []).catch(() => []);
   C.sentSets.forEach(st => st.sentences.forEach((x, k) => { x.id = `s_${st.id}_${k}`; x.set = st; }));
+  // Meaning of each word inside a phrase (tools/make_glossary.py). Optional.
+  C.gloss = await fetch('content/glossary.json').then(r => r.ok ? r.json() : null).catch(() => null);
   C.order = []; C.byId = {}; C.itemUnit = {};
   for (const u of C.units) {
     u.items = uniq(u.lessons.flatMap(l => l.newItems || []));
@@ -1386,11 +1388,47 @@ function playBtns(it) {
     h('button', { class: 'btn-play', 'aria-label': 'ฟังเสียง', onclick: () => play(it) }, '🔊'),
     h('button', { class: 'btn-play slow', 'aria-label': 'ฟังช้า', onclick: () => play(it, true) }, '🐢'));
 }
+// 十四 → [shí สิบ][sì สี่]; 这个多少钱 → [zhège อันนี้][duōshao เท่าไหร่][qián เงิน]. Longest known word first.
+// null for a single word (one character, or a glossary word marked "=" like 咖啡 / 便宜), or when the
+// pinyin doesn't line up with the characters.
+function wordParts(it) {
+  const G = C.gloss;
+  if (!G || !it.hanzi || !it.pinyin) return null;
+  const cs = [...it.hanzi].filter(c => /[一-鿿]/.test(c));
+  const whole = cs.join('');
+  if (cs.length < 2 || (G.words[whole] || '').startsWith('=')) return null;
+  const ss = sylls(it.pinyin).map(s => s.text.replace(/[^\p{L}\p{M}']/gu, '')).filter(Boolean);
+  // 儿 after a syllable ending in r (nǎr, zhèr) has no syllable of its own.
+  const py = [];
+  for (let i = 0, j = 0; i < cs.length; i++) {
+    if (cs[i] === '儿' && cs.length - i > ss.length - j && j && /r$/.test(ss[j - 1])) { py.push(''); continue; }
+    if (j >= ss.length) return null;
+    py.push(ss[j++]);
+  }
+  if (py.filter(Boolean).length !== ss.length) return null;
+  const parts = [];
+  for (let i = 0; i < cs.length;) {
+    let n = Math.min(4, cs.length - i);
+    for (; n > 1; n--) { const w = cs.slice(i, i + n).join(''); if (G.words[w] && w !== whole) break; }
+    const w = cs.slice(i, i + n).join('');
+    const th = (n > 1 ? G.words[w] : G.chars[w]) || '';
+    parts.push({ hz: w, py: py.slice(i, i + n).join(''), th: th.replace(/^=/, '') });
+    i += n;
+  }
+  return parts.length > 1 ? parts : null;
+}
+function partsRow(it, compact) {
+  const ps = wordParts(it);
+  if (!ps) return null;
+  return h('div', { class: 'word-parts' + (compact ? ' compact' : '') },
+    ...ps.map(p => h('span', { class: 'wp' }, h('b', {}, pyEl(p.py)), h('small', {}, p.th || '—'))));
+}
 function wordCard(it, { big = true } = {}) {
   return h('div', { class: 'word' + (big ? ' big' : '') },
     h('div', { class: 'word-py' }, pyEl(it.pinyin)),
     S.settings.showThai ? h('div', { class: 'word-th' }, it.thai) : null,
     h('div', { class: 'word-mean' }, it.meaning),
+    partsRow(it),
     S.settings.showHanzi && it.hanzi ? h('button', { class: 'hanzi-chip', 'aria-label': 'ขยายตัวจีนเพื่อให้คนจีนดู', onclick: () => showCard(it) }, it.hanzi, h('span', { class: 'chip-ic' }, ' ⤢')) : null);
 }
 
@@ -2210,6 +2248,7 @@ function feedback(ok, info, { title } = {}) {
     info ? h('div', { class: 'fb-ans' },
       h('div', {}, pyEl(info.pinyin), S.settings.showThai ? h('span', { class: 'muted' }, ' · ' + info.thai) : null),
       h('div', { class: 'fb-mean' }, info.meaning, info.hanzi ? h('span', { class: 'fb-hz', lang: 'zh-CN' }, ' ' + info.hanzi) : null),
+      partsRow(info, true),
       info.hanzi ? h('button', { class: 'btn-play small', 'aria-label': 'ฟังเสียง', onclick: () => play(info) }, '🔊') : null) : null,
     footBtn('ต่อไป', advance, ok ? 'btn-jade' : 'btn-danger'));
   if (info && info.hanzi) play(info);

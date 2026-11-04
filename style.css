@@ -374,6 +374,15 @@ input, textarea, select { -webkit-user-select: text; user-select: text; -webkit-
 .word.big .word-py { font-size: 36px; }
 .word-th { font-size: 20px; color: var(--muted); margin-top: 2px; }
 .word-mean { font-size: 18px; font-weight: 700; margin-top: 6px; }
+/* meaning of each word inside a phrase: shí สิบ · sì สี่ */
+.word-parts { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; margin-top: 10px; }
+.word-parts .wp { display: flex; flex-direction: column; align-items: center; padding: 4px 9px; border: 1.5px solid var(--line); border-radius: 10px; }
+.word-parts .wp b { font-size: 16px; }
+.word-parts .wp small { font-size: 13px; color: var(--muted); }
+.word-parts.compact { justify-content: flex-start; gap: 4px; margin-top: 6px; }
+.word-parts.compact .wp { padding: 2px 7px; }
+.word-parts.compact .wp b { font-size: 14px; }
+.word-parts.compact .wp small { font-size: 12px; }
 .hanzi-chip {
   margin-top: 10px; min-height: 40px; padding: 4px 12px; border-radius: 10px;
   border: 1px dashed var(--line); background: var(--surface-2); font-family: var(--font-zh); font-size: 16px; color: var(--muted);
