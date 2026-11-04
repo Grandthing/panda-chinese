@@ -128,7 +128,7 @@ addEventListener('pagehide', () => { saveNow(); Log.flush(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) { saveNow(); Log.flush(); } });
 
 // ============================================================ Debug log (ring buffer, kept across sessions → LINE / file)
-const APP_VERSION = '1.15.1';
+const APP_VERSION = '1.15.2';
 const LOG_KEY = 'pandaTalk.log';
 const LOG_MAX = 400;
 const safeJson = v => { try { return JSON.stringify(v); } catch { return String(v); } };
@@ -662,7 +662,8 @@ const CURL_HOW = ' — วิธีทำ: ยกปลายลิ้นขึ�
 const INI_HINT = {
   zh: 'zh = "จ" แบบม้วนลิ้น' + CURL_HOW, ch: 'ch = "ช" แบบม้วนลิ้น + พ่นลมแรง' + CURL_HOW, sh: 'sh = "ซ" แบบม้วนลิ้น (ไม่ใช่ ซ/ส ไทย)' + CURL_HOW,
   r: 'r = ม้วนลิ้นคล้าย "ร" ปน "ย" ไม่รัวลิ้น',
-  z: 'z = "จ" ปลายลิ้นแตะหลังฟันบน ไม่ม้วน', c: 'c = "ทซ" (ไม่ใช่ ช) ปลายลิ้นแตะหลังฟัน แล้วพ่นลมแรงเหมือน ts ใน cats', s: 's = "ซ" ธรรมดา ไม่ม้วนลิ้น',
+  z: 'z = "ตซ" ไม่พ่นลม (เหมือน ds ใน kids) ปลายลิ้นแตะหลังฟันบน — ไม่ใช่ "จ" ไทย ถ้าออกเป็น จ คนจีนจะได้ยินเป็น j (zǒu → jiǔ, zuǒ → jiū)',
+  c: 'c = "ทซ" (ไม่ใช่ ช) ปลายลิ้นแตะหลังฟัน แล้วพ่นลมแรงเหมือน ts ใน cats', s: 's = "ซ" ธรรมดา ไม่ม้วนลิ้น',
   j: 'j = "จ" ลิ้นแบน ไม่ม้วน', q: 'q = "ช" ลิ้นแบน + พ่นลมแรง', x: 'x = "ซ" ลิ้นแบน ยิ้มนิด ๆ',
   b: 'b = "ป" ไม่พ่นลม', p: 'p = "พ" พ่นลมแรง', d: 'd = "ต" ไม่พ่นลม', t: 't = "ท" พ่นลมแรง', g: 'g = "ก" ไม่พ่นลม', k: 'k = "ค" พ่นลมแรง',
   h: 'h = "ฮ" ขูดคอนิด ๆ', f: 'f = "ฟ" ฟันบนแตะริมฝีปากล่าง', l: 'l = "ล" ชัด ๆ', n: 'n = "น" ไม่ใช่ "ล"',
@@ -927,7 +928,8 @@ function classifyTone(curve, hasProfile, step) {
   if (fall >= 1.5 && steps.every(d => d <= 0.3)) return { tone: 4, weak: true, margin: 0 };
   if (rise >= 1.5 && steps.every(d => d >= -0.3) && !(hasProfile && m < -1.5)) return { tone: 2, weak: true, margin: 0 };
   if (rise >= 2 && c[4] >= mx - 0.8) {
-    const dipped = imn >= 1 && imn <= 3 && c[0] - mn >= 1.5 && (!hasProfile || mn < -1);
+    // A deep dip (2.5+ semitones) is tone 3 at any height: yuǎn in log 11-04 dipped 2.6 but only to -0.9.
+    const dipped = imn >= 1 && imn <= 3 && c[0] - mn >= 1.5 && (!hasProfile || mn < -1 || c[0] - mn >= 2.5);
     return { tone: dipped ? 3 : 2, margin: rise - 2 };
   }
   if (mx - mn < 2.5) return { tone: hasProfile && m < -1.5 ? 3 : 1, margin: 2.5 - (mx - mn) };
@@ -2162,7 +2164,7 @@ function renderExercise() {
   TTS.shuffle();
   const body = $('#l-body');
   body.scrollTop = 0;
-  logI('ex', `${L.i + 1}/${L.queue.length} ${ex.type}${ex.retry ? '(ซ่อม)' : ''} ${(ex.item && ex.item.id) || (ex.set && ex.set.id) || (ex.dialog && ex.dialog.id) || (ex.target && ex.target.pinyin) || ''}`);
+  logI('ex', `${L.i + 1}/${L.queue.length} ${ex.type}${ex.retry ? '(ซ่อม)' : ''}${ex.recall ? '(จำ)' : ''} ${(ex.item && ex.item.id) || (ex.set && ex.set.id) || (ex.dialog && ex.dialog.id) || (ex.target && ex.target.pinyin) || ''}`);
   const R = { talk: exTalk, num: exNum, intro: exIntro, listen: exListen, meaning: exMeaning, build: exBuild, tone: exTone, speak: exSpeak, match: exMatch, dialog: exDialog, tone_speak: exToneSpeak }[ex.type];
   body.replaceChildren(R(ex));
 }
@@ -2246,7 +2248,17 @@ function exIntro(ex) {
   return h('div', { class: 'ex' },
     h('div', { class: 'tag' }, it.listenOnly ? '👂 ประโยคที่คนจีนจะพูดกับคุณ' : '✨ คำใหม่'),
     wordCard(it), playBtns(it),
-    it.note ? pandaSay('hi', it.note) : null);
+    it.note ? pandaSay('hi', it.note) : null,
+    soundTips(it));
+}
+
+// The Thai reading can only write z/zh as "จ", c/ch as "ช" and s/sh as "ซ/ส", and reading it that way is
+// exactly what the recogniser hears as j/q/x (zǒu → jiǔ, cèsuǒ → qì sǐ). Say so the first time the word is met.
+function soundTips(it) {
+  if (it.listenOnly) return null;
+  const inis = [...new Set(sylls(it.pinyin).map(s => splitSyl(s.text).ini).filter(i => /^(z|c|zh|ch|sh)$/.test(i)))];
+  if (!inis.length) return null;
+  return h('div', { class: 'recall-hint' }, ...inis.map((i, k) => [k ? h('br') : null, '🗣 ' + INI_HINT[i]]));
 }
 
 function exListen(ex) {
