@@ -511,3 +511,5 @@ input, textarea, select { -webkit-user-select: text; user-select: text; -webkit-
 .chip-btn:disabled { opacity: .45; }
 .word.recall .word-mean { font-size: 26px; font-weight: 800; }
 .recall-hint { margin-top: 8px; font-size: 17px; }
+.hard-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 12px; }
+.hard-list .chip-btn { cursor: default; }

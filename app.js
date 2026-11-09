@@ -91,6 +91,8 @@ function defaultState() {
     srs: {},
     pitchProfile: null,
     toneStats: {},
+    speakMiss: {},
+    speakMissSeeded: false,
     stats: { speakAuto: 0, speakAutoPass: 0, speakSelf: 0 },
     lastExportDate: null,
   };
@@ -128,7 +130,7 @@ addEventListener('pagehide', () => { saveNow(); Log.flush(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) { saveNow(); Log.flush(); } });
 
 // ============================================================ Debug log (ring buffer, kept across sessions → LINE / file)
-const APP_VERSION = '1.17.3';
+const APP_VERSION = '1.18.0';
 const LOG_KEY = 'pandaTalk.log';
 const LOG_MAX = 400;
 const safeJson = v => { try { return JSON.stringify(v); } catch { return String(v); } };
@@ -1136,6 +1138,29 @@ const dueIds = () => Object.entries(S.srs).filter(([id, r]) => C.items[id] && r.
 const weakIds = () => Object.entries(S.srs).filter(([id, r]) => C.items[id] && r.wrong > 0)
   .sort((a, b) => b[1].wrong / (b[1].right + b[1].wrong) - a[1].wrong / (a[1].right + a[1].wrong)).map(([id]) => id);
 
+// Words the recognizer keeps failing when *you* say them (counted per attempt, passes pay it back).
+function speakMark(id, ok) {
+  const r = S.speakMiss[id] || (S.speakMiss[id] = { miss: 0, ok: 0 });
+  if (ok) r.ok++; else r.miss++;
+  r.t = Date.now();
+}
+// First run: rebuild the counts from the speaking attempts still in the log, so the list isn't empty on day one.
+function seedSpeakMiss() {
+  if (S.speakMissSeeded) return;
+  S.speakMissSeeded = true;
+  for (const e of Log.items) {
+    if (e.g !== 'sr') continue;
+    const m = /^(\S+) ได้ยิน .* score=([\d.]+)( trap=\S+)?( ctx)?/.exec(e.m);
+    if (!m || !C.items[m[1]]) continue;
+    speakMark(m[1], !!m[4] || (+m[2] >= 0.75 && !m[3] && !/diff=[^ ]*tone/.test(e.m)));
+  }
+  save();
+}
+const hardScore = r => r.miss - r.ok * 0.6;
+const hardIds = () => Object.entries(S.speakMiss)
+  .filter(([id, r]) => C.items[id] && !C.items[id].npc && canSpeak(C.items[id]) && r.miss >= 2 && hardScore(r) > 0)
+  .sort((a, b) => hardScore(b[1]) - hardScore(a[1]) || b[1].miss - a[1].miss).map(([id]) => id);
+
 const isDone = id => !!S.lessons[id];
 function unlockedIdx() { const e = S.unlockedUpTo && C.byId[S.unlockedUpTo]; return e ? e.index : 0; }
 function unlockTo(idx) {
@@ -1326,6 +1351,11 @@ function buildSession(mode, entry) {
       .map(it => [it, score(it.id)]).sort((a, b) => a[1] - b[1]).map(([it]) => it)
       .filter(it => { const k = meaningKey(it.meaning); if (seen.has(k)) return false; seen.add(k); return true; });
     for (const it of its.slice(0, 12)) q.push({ type: 'speak', item: it, recall: true });
+  } else if (mode === 'hard') {
+    // Your hardest-to-say words: first with the model to copy, then once more from memory.
+    const its = items(hardIds().slice(0, 8));
+    for (const it of its) q.push({ type: 'speak', item: it });
+    for (const it of shuffle(its)) q.push({ type: 'speak', item: it, recall: true });
   } else if (mode === 'numbers') {
     // Hear a number inside a real sentence, pick it, then say it (must) to pass.
     const sets = entry.setId === 'all' ? C.numSets : C.numSets.filter(st => st.id === entry.setId);
@@ -1706,6 +1736,19 @@ function talkCard() {
       (next && next < 99 ? ` · เรียน${next > 20 ? 'บทพิเศษ ' + (next - 20) : 'ถึงวันที่ ' + next} จะได้ประโยคเพิ่ม` : '')));
 }
 
+function hardCard() {
+  seedSpeakMiss();
+  const hard = items(hardIds().slice(0, 8));
+  const off = Speech.level() === 'off';
+  return h('section', { class: 'card-box' },
+    h('h3', {}, `🎯 คำที่พูดยาก: ${hard.length} คำ`),
+    h('p', { class: 'muted' }, hard.length
+      ? 'คำที่ระบบฟังไม่ออกบ่อยเวลาคุณพูด · พูดตามต้นแบบก่อน แล้วพูดจากความจำอีกรอบ · ผ่านบ่อยขึ้นคำจะหลุดออกจากรายการเอง · ไม่เสียหัวใจ'
+      : 'ยังไม่มีคำที่พูดไม่ผ่านบ่อย 👍 คำที่พูดพลาดหลายครั้งจะมาอยู่ตรงนี้'),
+    hard.length ? h('div', { class: 'hard-list' }, ...hard.map(it => h('span', { class: 'chip-btn' }, pyEl(it.pinyin), ' ', h('small', { class: 'muted' }, it.meaning)))) : null,
+    h('button', { class: 'btn btn-primary', disabled: !hard.length || off, onclick: () => startSession('hard') }, off ? 'ต้องเปิดไมค์ก่อน' : '🎯 ฝึกคำที่พูดยาก'));
+}
+
 function renderReview() {
   const due = dueIds(), learned = learnedIds();
   const weak = weakIds().slice(0, 6).map(id => C.items[id]);
@@ -1719,6 +1762,7 @@ function renderReview() {
       h('h3', {}, '🏆 ท้าทายตัวเอง: คำเก่าทั้งหมด'),
       h('p', { class: 'muted' }, 'สุ่ม 14 คำจากทุกวันที่เรียนมา เน้นคำที่เคยผิด/ไม่ได้เจอนาน · ฟัง แปล เรียง พูด · ไม่เสียหัวใจ · ได้ชุดใหม่ทุกรอบ'),
       h('button', { class: 'btn btn-primary', disabled: learned.length < 6, onclick: () => startSession('mix') }, learned.length < 6 ? 'เรียนให้ครบ 2 บทก่อน' : '🏆 เริ่มท้าทาย')),
+    hardCard(),
     h('section', { class: 'card-box' },
       h('h3', {}, '🧠 พูดจากความจำ'),
       h('p', { class: 'muted' }, 'เห็นแค่ความหมายภาษาไทย → นึกแล้วพูดเป็นภาษาจีนเอง ไม่มี pinyin ให้ดู · ติดได้กด 💡 ใบ้ · 12 คำ เน้นคำที่ลืมบ่อย · ไม่เสียหัวใจ'),
@@ -2638,8 +2682,10 @@ function exSpeak(ex) {
         if ((r.best >= (recall ? 0.8 : normZh(it.hanzi).length >= 6 ? 0.75 : 0.5) && !toneErr) || r.ctx) {
           if (r.ctx) status.replaceChildren('ผ่าน ✓ คนจีนน่าจะฟังออกจากบริบท — แต่ถ้าแก้จุดด้านล่างจะชัดขึ้น 👇');
           else if (dv) status.replaceChildren('ผ่าน แต่ยังมีจุดที่ควรแก้ 👇');
+          speakMark(it.id, true);
           return done('auto', r);
         }
+        speakMark(it.id, false); save();
         sfx('bad');
         const ch = carrierHint(it);
         if (ch) diffBox.prepend(ch);
