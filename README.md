@@ -58,5 +58,5 @@ python -m http.server 5173
 
 ## เสียงอัด
 
-`audio/<เสียง>/*.mp3` สร้างด้วย [edge-tts](https://github.com/rany2/edge-tts) (เสียง neural ของ Microsoft: Xiaoxiao, Yunxi, Xiaoyi, Yunyang) — ใช้เพื่อการเรียนส่วนตัว
+`audio/<เสียง>/*.mp3` สร้างด้วย [edge-tts](https://github.com/rany2/edge-tts) (เสียง neural ของ Microsoft: Xiaoxiao, Yunxi, Xiaoyi, Yunyang, Yunjian) — ใช้เพื่อการเรียนส่วนตัว
 edge-tts ไม่ใช่บริการทางการ ถ้าจะเผยแพร่แอปต่อสาธารณะ ควรตรวจเงื่อนไขการใช้เสียงก่อน หรืออัดเสียงใหม่จากแหล่งที่มีสิทธิ์ใช้

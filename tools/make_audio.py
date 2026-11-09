@@ -12,6 +12,7 @@ VOICES = [  # (folder, edge voice, label shown in the app)
     ('yunxi', 'zh-CN-YunxiNeural', 'Yunxi (ชาย)'),
     ('xiaoyi', 'zh-CN-XiaoyiNeural', 'Xiaoyi (หญิง)'),
     ('yunyang', 'zh-CN-YunyangNeural', 'Yunyang (ชาย)'),
+    ('yunjian', 'zh-CN-YunjianNeural', 'Yunjian (ชาย)'),
 ]
 RATE = '-10%'  # a touch slower than news-reading speed
 

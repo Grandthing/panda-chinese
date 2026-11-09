@@ -128,7 +128,7 @@ addEventListener('pagehide', () => { saveNow(); Log.flush(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) { saveNow(); Log.flush(); } });
 
 // ============================================================ Debug log (ring buffer, kept across sessions → LINE / file)
-const APP_VERSION = '1.17.2';
+const APP_VERSION = '1.17.3';
 const LOG_KEY = 'pandaTalk.log';
 const LOG_MAX = 400;
 const safeJson = v => { try { return JSON.stringify(v); } catch { return String(v); } };
@@ -1795,7 +1795,7 @@ function recCard(set, toggle) {
   const info = h('p', { class: 'muted small' });
   const total = Rec.allUrls().length;
   audioCached().then(n => { info.textContent = n >= total ? `✅ เก็บในเครื่องครบ ${total} ไฟล์ ใช้ได้แม้ไม่มีเน็ต` : `เก็บในเครื่องแล้ว ${n}/${total} ไฟล์ (คำที่เคยฟังจะเก็บไว้เอง)`; });
-  const dl = h('button', { class: 'btn btn-jade', onclick: () => downloadAudio(dl, info) }, '📥 โหลดเสียงทั้งหมดไว้ใช้ออฟไลน์ (~10 MB)');
+  const dl = h('button', { class: 'btn btn-jade', onclick: () => downloadAudio(dl, info) }, '📥 โหลดเสียงทั้งหมดไว้ใช้ออฟไลน์ (~35 MB)');
   return h('section', { class: 'card-box' }, h('h3', {}, '🎧 เสียงอัด (แนะนำ)'),
     toggle('recordedAudio', 'ใช้เสียงอัดแทนเสียงเครื่อง'),
     h('p', { class: 'muted small' }, 'เสียงหลัก (ใช้เมื่อปิดการสุ่ม):'), list,
