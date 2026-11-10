@@ -44,7 +44,10 @@ python -m http.server 5173
 | `js/ui.js` | ชิ้นส่วนหน้าจอและทุกหน้า (เรียน, การ์ดพูด, ทบทวน, ฉัน, ตั้งค่า) |
 | `js/lesson.js` | ตัวเล่นบทเรียน: หนึ่งฟังก์ชันต่อแบบฝึกหนึ่งแบบ |
 | `js/practice.js` | ประกอบประโยคเอง, พูดเองตามสถานการณ์ + สอบ, คนจีนตอบว่าอะไร, แยกเสียงคล้าย |
+| `js/vocab.js` | โหมดแยก "คลังคำ 500" (หลังจบ 20 วัน) |
 | `js/main.js` | router และการเปิดแอป |
+| `content/vocab.json` | คำ 500 คำพร้อมประโยคตัวอย่าง (สร้างจาก `tools/vocab_words.py` ด้วย `tools/make_vocab.py`) |
+| `docs/AFTER-TRIP-PROMPT.md` | แบบจดระหว่างทริป และ prompt สำหรับทำงานต่อหลังกลับมา |
 | `content/patterns.json` | โครงประโยค, สถานการณ์, คำตอบของคนจีน, คู่เสียงคล้าย (สร้างจาก `tools/make_patterns.py`) |
 | `tests/run.mjs` | ชุดทดสอบอัตโนมัติ (`npm test`) |
 | `style.css` | หน้าตา (มีโหมดมืด) |
@@ -64,6 +67,8 @@ python -m http.server 5173
 แบบฝึกถูกสร้างอัตโนมัติจากรายการคำ · ใส่ `reject` (คำที่ต่างแค่วรรณยุกต์) เพื่อให้ระบบบอกได้ว่าวรรณยุกต์ผิด · ใส่ `dialogs` เพื่อเพิ่มบทสนทนาจำลอง
 
    - โครงประโยค / สถานการณ์พูดเอง / คำตอบของคนจีน / คู่เสียงคล้าย (`content/patterns.json`) สร้างจาก `python tools/make_patterns.py` แล้วรัน `make_glossary.py` และ `make_audio.py` ต่อ
+
+   - คลังคำ 500 (`content/vocab.json`): เพิ่ม/แก้คำใน `tools/vocab_words.py` (คำ | ความหมาย | ประโยคตัวอย่าง | ความหมายประโยค) แล้วรัน `python tools/make_vocab.py` (ต้องมี `pip install pypinyin`) — pinyin และคำอ่านไทยสร้างให้อัตโนมัติ ถ้าอ่านผิดให้ใส่ pinyin เองเป็นช่องที่ 5 · เสียงของคลังคำอัดแค่ 2 เสียงเพื่อให้ไฟล์เล็ก
 
 เมื่อแก้ `js/*.js` / `style.css` / `index.html` ให้เปลี่ยน `VERSION` ใน `sw.js` และ `APP_VERSION` ใน `js/core.js` ด้วย แอปจะขึ้นปุ่ม "อัปเดต"
 

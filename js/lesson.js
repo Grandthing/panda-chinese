@@ -33,13 +33,14 @@ async function askQuit() {
 }
 function endSession() {
   if (L) logI('lesson', `end ${L.mode} at ${L.i}/${L.queue.length}`);
+  const back = L && (L.mode === 'vocab' || L.mode === 'vocabreview') ? '#/vocab' : '#/learn';
   L = null;
   TTS.persona = null;
   stopAudio();
   const el = lessonEl();
   el.hidden = true; el.replaceChildren();
   // Leaving #/lesson fires hashchange, which renders; only render directly if the hash won't change.
-  if (location.hash === '#/learn') render(); else location.replace('#/learn');
+  if (location.hash === back) render(); else location.replace(back);
 }
 
 function updateHead() {
@@ -60,7 +61,7 @@ function renderExercise() {
   const body = $('#l-body');
   body.scrollTop = 0;
   logI('ex', `${L.i + 1}/${L.queue.length} ${ex.type}${ex.retry ? '(ซ่อม)' : ''}${ex.recall ? '(จำ)' : ''} ${(ex.scene && ex.scene.id) || (ex.pattern && ex.pattern.id) || (ex.item && ex.item.id) || (ex.set && ex.set.id) || (ex.dialog && ex.dialog.id) || (ex.target && ex.target.pinyin) || ''}`);
-  const R = { frame: exFrame, sound: exSound, talk: exTalk, num: exNum, intro: exIntro, listen: exListen, meaning: exMeaning, build: exBuild, tone: exTone, speak: exSpeak, match: exMatch, dialog: exDialog, tone_speak: exToneSpeak }[ex.type];
+  const R = { vintro: exVocabIntro, frame: exFrame, sound: exSound, talk: exTalk, num: exNum, intro: exIntro, listen: exListen, meaning: exMeaning, build: exBuild, tone: exTone, speak: exSpeak, match: exMatch, dialog: exDialog, tone_speak: exToneSpeak }[ex.type];
   body.replaceChildren(R(ex));
 }
 
@@ -356,8 +357,8 @@ function exDialog(ex) {
 }
 
 // The whole verdict for one spoken attempt (kept apart from the screen so tests/run.mjs can replay real attempts).
-function judgeSpeech(it, alts, recall) {
-  const r = scoreSpeech(it, alts);
+function judgeSpeech(it, alts, recall, lenient) {
+  const r = scoreSpeech(it, alts, lenient);
   const dv = r.best < 1 ? diffView(it, r.heard) : null;
   const dd = speechDiff(it, r.heard);
   // A wrong tone changes the word for a native listener, so it never passes as "close enough".
@@ -459,7 +460,7 @@ function exSpeak(ex) {
         mic.classList.remove('on');
         mic.querySelector('.mic-l').textContent = 'แตะแล้วพูด';
         // Free reply: the first answer that passes, else the closest one (its diff is the most useful).
-        const tries = cands.map(c => ({ c, ...judgeSpeech(c, alts, recall) }));
+        const tries = cands.map(c => ({ c, ...judgeSpeech(c, alts, recall, ex.lenient) }));
         const hit = tries.find(t => t.pass) || tries.reduce((a, b) => (b.r.best > a.r.best ? b : a));
         const { r, dv, dd, toneErr, pass } = hit;
         attempts++;
@@ -683,6 +684,7 @@ function finishSession() {
     extra.push('+1 ❤️ จากการฝึก');
     goalHit = addXp(5); sess.xp += 5;
   }
+  if (sess.mode === 'vocab') extra.unshift(vocabFinish(sess));
   if (sess.mode === 'exam') extra.unshift(examResult(sess));
   if (sess.mode === 'pattern' && sess.entry.patId !== 'all') S.patDone[sess.entry.patId] = (S.patDone[sess.entry.patId] || 0) + 1;
   if (sess.mode === 'pattern' || sess.mode === 'scene') extra.unshift(`🗣️ พูดเองได้โดยไม่ใช้ตัวช่วย ${sess.recalled || 0}/${sess.queue.filter(q => q.recall).length} ประโยค`);

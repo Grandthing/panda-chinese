@@ -15,10 +15,10 @@ function renderNav(active) {
 function render() {
   if (!S.onboarded) return renderOnboarding(0);
   const r = route();
-  const views = { learn: renderLearn, phrases: renderPhrases, review: renderReview, me: renderMe, settings: renderSettings, help: renderHelp, guide: renderGuide };
+  const views = { learn: renderLearn, phrases: renderPhrases, review: renderReview, me: renderMe, settings: renderSettings, help: renderHelp, guide: renderGuide, vocab: renderVocab };
   const view = views[r] || renderLearn;
   logI('nav', r);
-  renderNav(['settings', 'help', 'guide'].includes(r) ? 'me' : (views[r] ? r : 'learn'));
+  renderNav(['settings', 'help', 'guide'].includes(r) ? 'me' : r === 'vocab' ? 'review' : (views[r] ? r : 'learn'));
   view();
 }
 addEventListener('hashchange', () => {

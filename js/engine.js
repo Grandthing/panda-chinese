@@ -338,6 +338,10 @@ function buildSession(mode, entry) {
       const st = pick(sets, 1)[0], group = pick(st.groups, 1)[0];
       q.push({ type: 'sound', set: st, group, answer: Math.floor(rand() * group.length) });
     }
+  } else if (mode === 'vocab') {
+    q.push(...vocabStageQueue(C.vocab.stages.find(st => st.id === entry.id), speakOK));
+  } else if (mode === 'vocabreview') {
+    q.push(...vocabReviewQueue(speakOK));
   } else if (mode === 'numbers') {
     // Hear a number inside a real sentence, pick it, then say it (must) to pass.
     const sets = entry.setId === 'all' ? C.numSets : C.numSets.filter(st => st.id === entry.setId);

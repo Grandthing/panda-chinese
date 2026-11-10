@@ -14,6 +14,7 @@ VOICES = [  # (folder, edge voice, label shown in the app)
     ('yunyang', 'zh-CN-YunyangNeural', 'Yunyang (ชาย)'),
     ('yunjian', 'zh-CN-YunjianNeural', 'Yunjian (ชาย)'),
 ]
+FEW = ['xiaoxiao', 'yunjian']  # the 500-word mode gets two voices: enough variety, a third of the download
 RATE = '-10%'  # a touch slower than news-reading speed
 
 
@@ -47,9 +48,18 @@ def texts():
     return sorted(t for t in out if t)
 
 
+def vocab_texts():  # content/vocab.json: each word and its example phrase
+    p = os.path.join(ROOT, 'content', 'vocab.json')
+    if not os.path.exists(p):
+        return []
+    d = json.load(open(p, encoding='utf-8'))
+    return sorted({speak_text(x) for th in d['themes'] for w in th['words'] for x in (w['hanzi'], w['ex']['hanzi'])})
+
+
 async def main():
     ts = texts()
-    ids = {t: hashlib.md5(t.encode('utf-8')).hexdigest()[:10] for t in ts}
+    vt = [t for t in vocab_texts() if t not in set(ts)]
+    ids = {t: hashlib.md5(t.encode('utf-8')).hexdigest()[:10] for t in ts + vt}
     sem = asyncio.Semaphore(6)
     failed = []
 
@@ -69,10 +79,10 @@ async def main():
 
     for folder, _, _ in VOICES:
         os.makedirs(os.path.join(ROOT, 'audio', folder), exist_ok=True)
-    await asyncio.gather(*(one(f, v, t) for f, v, _ in VOICES for t in ts))
-    index = {'voices': [{'id': f, 'label': l} for f, _, l in VOICES], 'texts': ids}
+    await asyncio.gather(*(one(f, v, t) for f, v, _ in VOICES for t in ts + (vt if f in FEW else [])))
+    index = {'voices': [{'id': f, 'label': l} for f, _, l in VOICES], 'texts': ids, 'few': {'voices': FEW, 'ids': sorted(ids[t] for t in vt)}}
     json.dump(index, open(os.path.join(ROOT, 'audio', 'index.json'), 'w', encoding='utf-8'), ensure_ascii=False, separators=(',', ':'))
-    print(f'{len(ts)} texts x {len(VOICES)} voices, failed {len(failed)}')
+    print(f'{len(ts)} texts x {len(VOICES)} voices + {len(vt)} vocab texts x {len(FEW)} voices, failed {len(failed)}')
     for f in failed[:10]:
         print('  ', f)
     return 1 if failed else 0

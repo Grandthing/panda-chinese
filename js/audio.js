@@ -109,15 +109,26 @@ const speakText = it => (typeof it === 'string' ? it : it.hanzi).replace(/[…]/
 const SILENT_WAV = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
 const AUDIO_CACHE = 'panda-audio';
 const Rec = {
-  index: null, el: null, unlocked: false, blobs: new Map(), cur: null,
+  index: null, few: new Set(), el: null, unlocked: false, blobs: new Map(), cur: null,
   async load() {
     try { const r = await fetch('audio/index.json'); if (r.ok) this.index = await r.json(); } catch {}
+    // index.few: texts recorded in only some of the voices (the 500-word mode), to keep the download small.
+    this.few = new Set(this.index && this.index.few ? this.index.few.ids : []);
     logI('audio', this.index ? `เสียงอัด ${Object.keys(this.index.texts).length} คำ × ${this.index.voices.length} เสียง` : 'ไม่มีเสียงอัด');
   },
   voices() { return this.index ? this.index.voices.map(v => v.id) : []; },
   usable() { return !!(this.index && S.settings.recordedAudio); },
-  url(text, voice) { const id = this.index && this.index.texts[text]; return id ? `audio/${voice}/${id}.mp3` : null; },
-  allUrls() { return this.voices().flatMap(v => Object.values(this.index.texts).map(id => `audio/${v}/${id}.mp3`)); },
+  url(text, voice) {
+    const id = this.index && this.index.texts[text];
+    if (!id) return null;
+    if (this.few.has(id) && !this.index.few.voices.includes(voice)) { const fv = this.index.few.voices; voice = fv[parseInt(id.slice(0, 4), 16) % fv.length]; }
+    return `audio/${voice}/${id}.mp3`;
+  },
+  // Everything to keep offline. The 500-word mode's sound joins once that mode has been started.
+  allUrls() {
+    const vocab = Object.keys(S.vocab.done).length > 0, fv = this.index.few ? this.index.few.voices : [];
+    return this.voices().flatMap(v => Object.values(this.index.texts).filter(id => !this.few.has(id) || (vocab && fv.includes(v))).map(id => `audio/${v}/${id}.mp3`));
+  },
   voice() {
     const vs = this.voices();
     if (TTS.persona && TTS.persona.rec) return TTS.persona.rec;

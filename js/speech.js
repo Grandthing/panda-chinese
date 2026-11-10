@@ -109,7 +109,7 @@ function carrierHint(it) {
   return h('p', { class: 'hint' }, '💡 คำเดียวโดด ๆ ระบบฟังยาก ลองพูดเป็นวลี: ',
     h('button', { class: 'chip-btn', onclick: () => TTS.speak(c[0], 0.8) }, h('b', { lang: 'zh-CN' }, c[0]), ' ', pyEl(c[1]), ' 🔊'));
 }
-function scoreSpeech(item, alts) {
+function scoreSpeech(item, alts, lenient) {
   const targets = [item.hanzi, ...(item.accept || [])].map(normZh).filter(Boolean);
   const rejects = (item.reject || []).map(normZh).filter(Boolean);
   alts = expandAlts(alts);
@@ -146,7 +146,7 @@ function scoreSpeech(item, alts) {
   }
   let ctx = false;
   if (best < 1 && !toneTrap && one.length > 1) {
-    const raw = alts.find(r => contextOK(contextScore(item, r)));
+    const raw = alts.find(r => contextOK(contextScore(item, r), lenient));
     if (raw) { ctx = true; heard = raw; best = Math.max(best, 0.8); }
   }
   return { best, heard, toneTrap, ctx };
@@ -259,9 +259,14 @@ function contextScore(item, heardRaw) {
     if (j > i && B[i][j] === B[i][j - 1]) { j--; continue; }
     per.unshift(sim(i - 1, j - 1)); i--; j--;
   }
-  return { avg: per.reduce((a, b) => a + b, 0) / n, min: Math.min(...per), extra: m - n };
+  return { avg: per.reduce((a, b) => a + b, 0) / n, min: Math.min(...per), extra: m - n, n, low: per.filter(x => x < 0.55).length };
 }
-const contextOK = c => !!c && c.avg >= 0.75 && c.min >= 0.55 && c.extra <= 1;
+// lenient (the 500-word mode, at the learner's request): a syllable may be further off — in a phrase of 4+ syllables
+// one syllable only needs the right vowel — and a filler word or two around the phrase doesn't matter. A syllable
+// with nothing in common still fails: that is a different word (猫 heard as 狗), not an accent.
+const contextOK = (c, lenient) => !!c && (lenient
+  ? c.avg >= 0.7 && c.extra <= 2 && (c.min >= 0.5 || (c.n >= 4 && c.low <= 1 && c.min >= 0.4))
+  : c.avg >= 0.75 && c.min >= 0.55 && c.extra <= 1);
 const FLAT_CURL = { zh: 'z', ch: 'c', sh: 's', z: 'zh', c: 'ch', s: 'sh' };
 const CURL_HOW = ' — วิธีทำ: ยกปลายลิ้นขึ้นไปใกล้เพดานแข็ง (เลยปุ่มเหงือกไปนิด) ลิ้นไม่แตะฟัน แล้วออกเสียง เสียงจะทุ้มกว่าภาษาไทย';
 const INI_HINT = {

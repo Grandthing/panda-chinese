@@ -518,3 +518,7 @@ input, textarea, select { -webkit-user-select: text; user-select: text; -webkit-
 .frame-hz { font-size: 1.6rem; font-weight: 700; }
 .alt-list { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 10px 0; }
 .alt-list > .muted { width: 100%; }
+
+/* vocab.js: คลังคำ 500 */
+.vbar { height: 10px; border-radius: 6px; background: rgba(128,128,128,.2); overflow: hidden; margin: 8px 0 12px; }
+.vbar > i { display: block; height: 100%; background: var(--jade, #2a9d6f); border-radius: 6px; }

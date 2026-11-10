@@ -115,7 +115,7 @@ function wordParts(it) {
 }
 function partsRow(it, compact) {
   const ps = wordParts(it);
-  if (!ps) return null;
+  if (!ps || ps.some(p => !p.th)) return null; // a word the glossary doesn't cover: no half-empty row
   return h('div', { class: 'word-parts' + (compact ? ' compact' : '') },
     ...ps.map(p => h('span', { class: 'wp' }, h('b', {}, pyEl(p.py)), h('small', {}, p.th || '—'))));
 }
@@ -380,6 +380,7 @@ function renderReview() {
     patternCard(),
     repliesCard(),
     soundsCard(),
+    vocabCard(),
     hardCard(),
     h('section', { class: 'card-box' },
       h('h3', {}, '🧠 พูดจากความจำ'),

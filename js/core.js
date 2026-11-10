@@ -95,6 +95,7 @@ function defaultState() {
     exams: [],      // situation exams: { d, pass, n }
     patDone: {},    // sentence pattern id → times finished
     soundStats: {}, // look-alike sound set id → [heard, right]
+    vocab: { done: {}, rev: {} }, // คลังคำ 500: stage id → { d, n }; word id → times reviewed
     stats: { speakAuto: 0, speakAutoPass: 0, speakSelf: 0 },
     lastExportDate: null,
   };
@@ -107,7 +108,7 @@ function normalizeState(s) {
   const base = defaultState();
   s = migrate(s);
   for (const k of Object.keys(base)) if (s[k] === undefined) s[k] = base[k];
-  for (const k of ['settings', 'xp', 'streak', 'hearts', 'stats']) s[k] = { ...base[k], ...s[k] };
+  for (const k of ['settings', 'xp', 'streak', 'hearts', 'stats', 'vocab']) s[k] = { ...base[k], ...s[k] };
   return s;
 }
 
@@ -132,7 +133,7 @@ addEventListener('pagehide', () => { saveNow(); Log.flush(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) { saveNow(); Log.flush(); } });
 
 // ============================================================ Debug log (ring buffer, kept across sessions → LINE / file)
-const APP_VERSION = '2.0.0';
+const APP_VERSION = '2.1.0';
 const LOG_KEY = 'pandaTalk.log';
 const LOG_MAX = 400;
 const safeJson = v => { try { return JSON.stringify(v); } catch { return String(v); } };
@@ -171,7 +172,7 @@ for (const [k, l] of [['error', 'E'], ['warn', 'W']]) {
 }
 
 // ============================================================ Content
-const C = { items: {}, cats: {}, units: [], order: [], byId: {}, toneSets: [], itemUnit: {}, version: '', pat: { patterns: [], scenes: [], replies: [], sounds: [] } };
+const C = { items: {}, cats: {}, units: [], order: [], byId: {}, toneSets: [], itemUnit: {}, version: '', pat: { patterns: [], scenes: [], replies: [], sounds: [] }, vocab: { themes: [], stages: [], words: [] } };
 
 async function loadContent() {
   const res = await fetch('content/units.json');
@@ -196,6 +197,8 @@ async function loadContent() {
   C.pat.patterns.forEach(p => p.sentences.forEach((x, k) => { x.id = `p_${p.id}_${k}`; x.set = p; }));
   C.pat.scenes.forEach(sc => sc.answers.forEach((a, k) => { a.id = `sc_${sc.id}_${k}`; }));
   C.pat.replies.forEach(st => { const set = { icon: st.icon, title: `คุณ${st.title} · เขาตอบว่าอะไร?` }; st.lines.forEach((x, k) => { x.id = `r_${st.id}_${k}`; x.set = set; }); });
+  // คลังคำ 500 (tools/make_vocab.py). Optional.
+  vocabInit(await fetch('content/vocab.json').then(r => r.ok ? r.json() : null).catch(() => null));
   C.order = []; C.byId = {}; C.itemUnit = {};
   for (const u of C.units) {
     u.items = uniq(u.lessons.flatMap(l => l.newItems || []));
@@ -241,7 +244,7 @@ function lintContent() {
 // ============================================================ Pinyin
 const MARKS = 'āáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜ';
 const V = 'aeiouüvāáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜ';
-const SYL_RE = new RegExp(`(?:zh|ch|sh|[bpmfdtnlgkhjqxrzcsyw])?[${V}]+(?:ng|n(?![${V}])|r(?![${V}]))?`, 'gi');
+const SYL_RE = new RegExp(`(?:zh|ch|sh|[bpmfdtnlgkhjqxrzcsyw])?[${V}]+(?:ng(?![${V}])|n(?![${V}])|r(?![${V}]))?`, 'gi');
 
 function toneOf(s) {
   for (const ch of s.normalize('NFC')) { const i = MARKS.indexOf(ch.toLowerCase()); if (i >= 0) return (i % 4) + 1; }

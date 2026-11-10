@@ -64,6 +64,9 @@ async function testContent() {
   const app = await openApp();
   const info = app.run('({ items: Object.keys(C.items).length, order: C.order.length, issues: lintContent() })');
   check(info.order > 0 && info.items > 0, `${info.items} คำ, ${info.order} ด่าน โหลดได้`);
+  const v = app.run('({ words: C.vocab.words.length, stages: C.vocab.stages.length, ids: new Set(C.vocab.words.map(w => w.id)).size, bad: C.vocab.words.filter(w => sylls(w.ex.pinyin).length !== [...normZh(w.ex.hanzi)].length).map(w => w.hanzi) })');
+  check(v.words === 500 && v.ids === 500, `คลังคำ ${v.words} คำ ${v.stages} ด่าน ไม่ซ้ำกัน`);
+  check(v.bad.length === 0, 'pinyin ของประโยคตัวอย่างตรงกับจำนวนตัวอักษร' + (v.bad.length ? ': ' + v.bad.join(' ') : ''));
   check(info.issues.length === 0, 'lintContent ไม่พบปัญหา' + (info.issues.length ? ': ' + info.issues.slice(0, 5).join(' | ') : ''));
   check(app.errors.length === 0, 'เปิดแอปไม่มี error' + (app.errors.length ? ': ' + app.errors[0] : ''));
   app.close();
@@ -101,6 +104,13 @@ async function testSpeech() {
   check(j('zhaoqian', ['赵强']) === true, 'วลีที่คนจีนฟังออกจากบริบท (找钱 ← 赵强) → ผ่าน');
   check(j('mai3', ['卖']) === false, 'คำเดียววรรณยุกต์ผิดเป็นอีกคำ (买 ← 卖) → ไม่ผ่าน');
   check(j('dache', ['大叔']) === false, 'ฟังเป็นคำอื่นทั้งคำ (打车 ← 大叔) → ไม่ผ่าน');
+  // คลังคำ 500: a phrase said a little off (one syllable garbled in a long phrase, filler words around it) passes
+  // there, and only there.
+  const v = (hz, heard, lenient) => app.run(`judgeSpeech(C.vocab.words.find(w => w.hanzi === ${JSON.stringify(hz)}).ex, ${JSON.stringify([heard])}, true, ${lenient}).pass`);
+  check(v('东西', '那个我想买东西吧', true) === true && v('东西', '那个我想买东西吧', false) === true, 'คลังคำ: มีคำเกินหน้าหลัง → ผ่าน');
+  check(v('猫', '我喜欢套', true) === true && v('猫', '我喜欢套', false) === false, 'คลังคำ: เพี้ยน 1 พยางค์แต่สระถูก (猫 māo ← tào) → ผ่านเฉพาะโหมดคลังคำ');
+  check(v('猫', '我喜欢狗', true) === false, 'คลังคำ: กลายเป็นอีกคำ (猫 ← 狗) → ไม่ผ่าน');
+  check(v('比', '你好谢谢再见', true) === false, 'คลังคำ: พูดคนละเรื่อง → ไม่ผ่าน');
   check(app.errors.length === 0, 'ไม่มี error' + (app.errors.length ? ': ' + app.errors[0] : ''));
   app.close();
 }
@@ -117,6 +127,7 @@ function learnedState(app) {
     s.unlockedUpTo = C.order[C.order.length - 1].id;
     for (const id of Object.keys(C.items).slice(0, 12)) s.speakMiss[id] = { miss: 5, ok: 0 };
     s.speakMissSeeded = true;
+    for (const st of C.vocab.stages.slice(0, 4)) s.vocab.done[st.id] = { d: today(), n: 1 };
     return JSON.parse(JSON.stringify(s));
   })()`);
 }
@@ -136,7 +147,7 @@ async function playSession(app, label, wrongEvery = 6) {
     const before = run('L.i');
     const wrong = wrongEvery && ++graded % wrongEvery === 0;
     const opts = $$('#l-body .options .opt');
-    if (ex.type === 'intro' || ex.type === 'frame') foot().click();
+    if (ex.type === 'intro' || ex.type === 'frame' || ex.type === 'vintro') foot().click();
     else if (ex.type === 'match') {
       const cols = $$('#l-body .match-col');
       for (const b of [...cols[0].children]) {
@@ -192,7 +203,7 @@ async function testPlay() {
   const boot = await openApp();
   const state = learnedState(boot);
   const path0 = boot.run('C.order.map(e => ({ id: e.id, kind: e.kind }))');
-  const modes = PRACTICE_MODES;
+  const modes = PRACTICE_MODES.concat([['vocabreview', { id: 'vocab-review' }]], boot.run('C.vocab.stages.map(st => st.id)').map(id => ['vocab', { id }]));
   boot.close();
   const app = await openApp(state);
   app.run('Speech.recognize = async () => window.__heard; Speech.toneAvailable = () => false;');
@@ -210,7 +221,7 @@ async function testPlay() {
   for (const [mode, entry] of modes) await go(mode + (entry ? ':' + entry.id : ''), `startSession(${JSON.stringify(mode)}, ${JSON.stringify(entry || null)})`);
   check(problems.length === 0, `${played} ด่าน/โหมด เล่นจนจบได้` + (problems.length ? `\n      พัง ${problems.length}:\n` + problems.slice(0, 12).map(p => '      ' + p.split('\n').slice(0, 3).join('\n        ')).join('\n') : ''));
   // Every top-level screen renders.
-  for (const tab of ['learn', 'phrases', 'review', 'me', 'settings', 'help', 'guide']) {
+  for (const tab of ['learn', 'phrases', 'review', 'me', 'settings', 'help', 'guide', 'vocab']) {
     app.errors.length = 0;
     app.run(`location.hash = '#/${tab}'`);
     await tick(20);
