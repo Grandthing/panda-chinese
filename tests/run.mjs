@@ -136,7 +136,7 @@ async function playSession(app, label, wrongEvery = 6) {
     const before = run('L.i');
     const wrong = wrongEvery && ++graded % wrongEvery === 0;
     const opts = $$('#l-body .options .opt');
-    if (ex.type === 'intro') foot().click();
+    if (ex.type === 'intro' || ex.type === 'frame') foot().click();
     else if (ex.type === 'match') {
       const cols = $$('#l-body .match-col');
       for (const b of [...cols[0].children]) {
@@ -182,7 +182,10 @@ async function playSession(app, label, wrongEvery = 6) {
 }
 
 const PRACTICE_MODES = [['review'], ['mix'], ['recall'], ['hard'], ['listen'], ['tone'],
-  ['talk', { id: 'talk-all', setId: 'all' }], ['numbers', { id: 'num-all', setId: 'all' }]];
+  ['talk', { id: 'talk-all', setId: 'all' }], ['numbers', { id: 'num-all', setId: 'all' }],
+  ['scene', { id: 'scene' }], ['exam', { id: 'exam' }], ['replies', { id: 'rep-all', setId: 'all' }], ['sounds', { id: 'snd-all', setId: 'all' }],
+  ['pattern', { id: 'pat-all', patId: 'all' }],
+  ...['yao', 'buyao', 'count', 'price', 'tai', 'keyi', 'where', 'nearby', 'have', 'go', 'time', 'trouble'].map(p => ['pattern', { id: 'pat-' + p, patId: p }])];
 
 async function testPlay() {
   console.log('play (เล่นทุกด่านจนจบ)');
@@ -204,7 +207,7 @@ async function testPlay() {
     if (p) { problems.push(p); app.run('if (L) endSession()'); await tick(); } else played++;
   };
   for (const e of path0) await go(e.id, `startSession(${JSON.stringify(e.kind)}, C.byId[${JSON.stringify(e.id)}])`);
-  for (const [mode, entry] of modes) await go(mode + (entry ? ':' + entry.setId : ''), `startSession(${JSON.stringify(mode)}, ${JSON.stringify(entry)})`);
+  for (const [mode, entry] of modes) await go(mode + (entry ? ':' + entry.id : ''), `startSession(${JSON.stringify(mode)}, ${JSON.stringify(entry || null)})`);
   check(problems.length === 0, `${played} ด่าน/โหมด เล่นจนจบได้` + (problems.length ? `\n      พัง ${problems.length}:\n` + problems.slice(0, 12).map(p => '      ' + p.split('\n').slice(0, 3).join('\n        ')).join('\n') : ''));
   // Every top-level screen renders.
   for (const tab of ['learn', 'phrases', 'review', 'me', 'settings', 'help', 'guide']) {

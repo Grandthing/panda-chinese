@@ -166,6 +166,8 @@ function mkBuild(it) {
   }
   return { type: 'build', item: it, answer: py, bank: shuffle(tiles.concat(extra)).map((t, k) => ({ ...t, k })) };
 }
+// A whole sentence as tiles: the punctuation is not part of the answer.
+const mkBuildSent = s => mkBuild({ ...s, pinyin: s.pinyin.replace(/[,.?!]/g, ''), thai: s.thai.replace(/[,.?!]/g, '') });
 function mkMatch(items) { return { type: 'match', items: pick(items, Math.min(5, items.length)) }; }
 function toneSetFor(items) {
   const hz = new Set(items.flatMap(it => [it.hanzi, ...(it.reject || [])]));
@@ -301,6 +303,41 @@ function buildSession(mode, entry) {
     const its = items(hardIds().slice(0, 8));
     for (const it of its) q.push({ type: 'speak', item: it });
     for (const it of shuffle(its)) q.push({ type: 'speak', item: it, recall: true });
+  } else if (mode === 'pattern') {
+    // One sentence frame: see it, build two examples and copy them, then say combinations never shown before.
+    if (entry.patId === 'all') {
+      for (const s of pick(C.pat.patterns.flatMap(p => p.sentences.filter(sentOpen)), 10)) q.push({ type: 'speak', item: s, recall: true });
+    } else {
+      const p = C.pat.patterns.find(x => x.id === entry.patId);
+      const open = shuffle(p.sentences.filter(sentOpen)), eg = open.slice(0, 2);
+      if (open.length) q.push({ type: 'frame', pattern: p, examples: eg });
+      for (const s of eg) { q.push(mkBuildSent(s)); if (speakOK) q.push({ type: 'speak', item: s }); }
+      for (const s of open.slice(2, 8)) q.push(speakOK ? { type: 'speak', item: s, recall: true } : mkBuildSent(s));
+      if (speakOK) for (const s of eg) q.push({ type: 'speak', item: s, recall: true });
+    }
+  } else if (mode === 'scene' || mode === 'exam') {
+    // A situation, no choices, several right answers. The exam: 10 of them spread over the topics, no hints, two tries.
+    const exam = mode === 'exam';
+    const byTopic = {};
+    for (const sc of shuffle(C.pat.scenes.filter(sentOpen))) (byTopic[sc.icon] = byTopic[sc.icon] || []).push(sc);
+    const spread = [];
+    for (let k = 0; spread.length < (exam ? 10 : 8); k++) {
+      const row = shuffle(Object.values(byTopic)).map(g => g[k]).filter(Boolean);
+      if (!row.length) break;
+      spread.push(...row);
+    }
+    for (const sc of spread.slice(0, exam ? 10 : 8)) q.push({ type: 'speak', item: sc.answers[0], alts: sc.answers, scene: sc, recall: true, exam, must: exam });
+  } else if (mode === 'replies') {
+    // The different things a local answers to one question, by ear; half of them at real-life speed.
+    const sets = C.pat.replies.filter(st => replyOpen(st) && (entry.setId === 'all' || st.id === entry.setId));
+    for (const [st, ln] of pick(sets.flatMap(st => st.lines.map(ln => [st, ln])), 10))
+      q.push({ type: 'talk', item: ln, options: shuffle([ln, ...pick(st.lines.filter(x => x !== ln && x.meaning !== ln.meaning), 3)]), fast: rand() < 0.5 });
+  } else if (mode === 'sounds') {
+    const sets = C.pat.sounds.filter(st => entry.setId === 'all' || st.id === entry.setId);
+    for (let k = 0; k < 12 && sets.length; k++) {
+      const st = pick(sets, 1)[0], group = pick(st.groups, 1)[0];
+      q.push({ type: 'sound', set: st, group, answer: Math.floor(rand() * group.length) });
+    }
   } else if (mode === 'numbers') {
     // Hear a number inside a real sentence, pick it, then say it (must) to pass.
     const sets = entry.setId === 'all' ? C.numSets : C.numSets.filter(st => st.id === entry.setId);
@@ -330,6 +367,6 @@ function buildSession(mode, entry) {
   return { mode, entry, queue: q.map((ex, i) => ({ ...ex, uid: i })), i: 0, results: {}, xp: 0, combo: 0, heartsLost: 0, nextUid: q.length };
 }
 
-const GRADED = new Set(['listen', 'meaning', 'build', 'tone', 'dialog', 'match', 'num', 'talk']);
+const GRADED = new Set(['listen', 'meaning', 'build', 'tone', 'dialog', 'match', 'num', 'talk', 'sound']);
 const HEART_MODES = new Set(['lesson', 'checkpoint', 'challenge', 'skip']);
 const PATH_MODES = new Set(['lesson', 'checkpoint', 'challenge']);

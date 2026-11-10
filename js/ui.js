@@ -376,6 +376,10 @@ function renderReview() {
       h('h3', {}, '🏆 ท้าทายตัวเอง: คำเก่าทั้งหมด'),
       h('p', { class: 'muted' }, 'สุ่ม 14 คำจากทุกวันที่เรียนมา เน้นคำที่เคยผิด/ไม่ได้เจอนาน · ฟัง แปล เรียง พูด · ไม่เสียหัวใจ · ได้ชุดใหม่ทุกรอบ'),
       h('button', { class: 'btn btn-primary', disabled: learned.length < 6, onclick: () => startSession('mix') }, learned.length < 6 ? 'เรียนให้ครบ 2 บทก่อน' : '🏆 เริ่มท้าทาย')),
+    sceneCard(),
+    patternCard(),
+    repliesCard(),
+    soundsCard(),
     hardCard(),
     h('section', { class: 'card-box' },
       h('h3', {}, '🧠 พูดจากความจำ'),
@@ -417,6 +421,7 @@ function renderMe() {
       statCard('⚡', S.xp.total, 'XP ทั้งหมด'), statCard('📚', learnedIds().length, 'คำที่รู้'),
       statCard('🎙️', st.speakAuto ? Math.round(st.speakAutoPass / st.speakAuto * 100) + '%' : '—', 'พูดผ่าน (ตรวจอัตโนมัติ)'),
       statCard('🗣️', st.speakSelf, 'พูดแบบตรวจเอง')),
+    speakingCard(),
     h('section', { class: 'card-box' }, h('h3', {}, 'XP 7 วันล่าสุด'),
       h('div', { class: 'week' }, ...days.map(d => {
         const v = S.xp.byDate[d] || 0;
@@ -453,7 +458,7 @@ function recCard(set, toggle) {
   const info = h('p', { class: 'muted small' });
   const total = Rec.allUrls().length;
   audioCached().then(n => { info.textContent = n >= total ? `✅ เก็บในเครื่องครบ ${total} ไฟล์ ใช้ได้แม้ไม่มีเน็ต` : `เก็บในเครื่องแล้ว ${n}/${total} ไฟล์ (คำที่เคยฟังจะเก็บไว้เอง)`; });
-  const dl = h('button', { class: 'btn btn-jade', onclick: () => downloadAudio(dl, info) }, '📥 โหลดเสียงทั้งหมดไว้ใช้ออฟไลน์ (~35 MB)');
+  const dl = h('button', { class: 'btn btn-jade', onclick: () => downloadAudio(dl, info) }, '📥 โหลดเสียงทั้งหมดไว้ใช้ออฟไลน์ (~50 MB)');
   return h('section', { class: 'card-box' }, h('h3', {}, '🎧 เสียงอัด (แนะนำ)'),
     toggle('recordedAudio', 'ใช้เสียงอัดแทนเสียงเครื่อง'),
     h('p', { class: 'muted small' }, 'เสียงหลัก (ใช้เมื่อปิดการสุ่ม):'), list,

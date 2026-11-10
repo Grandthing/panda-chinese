@@ -17,7 +17,7 @@ VOICES = [  # (folder, edge voice, label shown in the app)
 RATE = '-10%'  # a touch slower than news-reading speed
 
 
-def speak_text(hz):  # must match speakText() in app.js
+def speak_text(hz):  # must match speakText() in js/audio.js
     return re.sub('[…]', '', hz).strip()
 
 
@@ -36,6 +36,14 @@ def texts():
     if os.path.exists(sents):  # long shop / food / snack sentences
         for st in json.load(open(sents, encoding='utf-8'))['sets']:
             out |= {speak_text(x['hanzi']) for x in st['sentences']}
+    pats = os.path.join(ROOT, 'content', 'patterns.json')
+    if os.path.exists(pats):  # sentence patterns, free-reply scenes, local replies, look-alike sounds
+        d = json.load(open(pats, encoding='utf-8'))
+        out |= {speak_text(x['hanzi']) for p in d['patterns'] for x in p['sentences']}
+        out |= {speak_text(a['hanzi']) for sc in d['scenes'] for a in sc['answers']}
+        out |= {speak_text(sc['npc']['hanzi']) for sc in d['scenes'] if sc['npc']}
+        out |= {speak_text(x['hanzi']) for r in d['replies'] for x in r['lines']}
+        out |= {speak_text(w['hanzi']) for st in d['sounds'] for g in st['groups'] for w in g}
     return sorted(t for t in out if t)
 
 

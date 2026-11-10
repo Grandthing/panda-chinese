@@ -59,8 +59,8 @@ function renderExercise() {
   TTS.shuffle();
   const body = $('#l-body');
   body.scrollTop = 0;
-  logI('ex', `${L.i + 1}/${L.queue.length} ${ex.type}${ex.retry ? '(ซ่อม)' : ''}${ex.recall ? '(จำ)' : ''} ${(ex.item && ex.item.id) || (ex.set && ex.set.id) || (ex.dialog && ex.dialog.id) || (ex.target && ex.target.pinyin) || ''}`);
-  const R = { talk: exTalk, num: exNum, intro: exIntro, listen: exListen, meaning: exMeaning, build: exBuild, tone: exTone, speak: exSpeak, match: exMatch, dialog: exDialog, tone_speak: exToneSpeak }[ex.type];
+  logI('ex', `${L.i + 1}/${L.queue.length} ${ex.type}${ex.retry ? '(ซ่อม)' : ''}${ex.recall ? '(จำ)' : ''} ${(ex.scene && ex.scene.id) || (ex.pattern && ex.pattern.id) || (ex.item && ex.item.id) || (ex.set && ex.set.id) || (ex.dialog && ex.dialog.id) || (ex.target && ex.target.pinyin) || ''}`);
+  const R = { frame: exFrame, sound: exSound, talk: exTalk, num: exNum, intro: exIntro, listen: exListen, meaning: exMeaning, build: exBuild, tone: exTone, speak: exSpeak, match: exMatch, dialog: exDialog, tone_speak: exToneSpeak }[ex.type];
   body.replaceChildren(R(ex));
 }
 
@@ -122,7 +122,7 @@ function choiceList(options, render, onPick) {
   });
   return { wrap, get: () => sel };
 }
-function checkFlow(getSel, isOk, info, srsIds) {
+function checkFlow(getSel, isOk, info, srsIds, after) {
   L.isOk = isOk;
   const btn = footBtn('ตรวจคำตอบ', () => {
     const ex = L.queue[L.i];
@@ -133,6 +133,7 @@ function checkFlow(getSel, isOk, info, srsIds) {
       L.queue.splice(L.i + 1, 0, { type: 'speak', item: ex.item, must: ex.must, follow: true, uid: L.nextUid++ });
       feedback(ok, info, { title: 'ถูก! ต่อไปพูดออกเสียง 🎙️' });
     } else feedback(ok, info);
+    if (after) after(ok);
   }, 'btn-primary', true);
   setFoot(btn);
   return () => { btn.disabled = false; };
@@ -185,13 +186,13 @@ function exNum(ex) {
 
 function exTalk(ex) {
   const it = ex.item;
-  setTimeout(() => play(it), 250);
+  setTimeout(() => play(it, ex.fast ? 'fast' : false), 250);
   let enable;
   const list = choiceList(ex.options, o => o.meaning, () => enable());
   enable = checkFlow(list.get, sel => sel === it, it, []);
-  return h('div', { class: 'ex' }, h('div', { class: 'tag' }, `${it.set.icon} ${it.set.title}`), prompt('ฟังแล้วเลือกความหมาย'),
-    h('div', { class: 'big-play' }, h('button', { class: 'btn-speaker', 'aria-label': 'ฟังอีกครั้ง', onclick: () => play(it) }, '🔊'),
-      h('button', { class: 'btn-play slow', 'aria-label': 'ฟังช้า', onclick: () => play(it, true) }, '🐢'), fastBtn(it)),
+  return h('div', { class: 'ex' }, h('div', { class: 'tag' }, `${it.set.icon} ${it.set.title}`), prompt(ex.fast ? 'ฟังแล้วเลือกความหมาย ⚡ ความเร็วจริง' : 'ฟังแล้วเลือกความหมาย'),
+    h('div', { class: 'big-play' }, h('button', { class: 'btn-speaker', 'aria-label': 'ฟังอีกครั้ง', onclick: () => play(it, ex.fast ? 'fast' : false) }, '🔊'),
+      h('button', { class: 'btn-play slow', 'aria-label': 'ฟังช้า', onclick: () => play(it, true) }, '🐢'), ex.fast ? null : fastBtn(it)),
     list.wrap);
 }
 
@@ -380,6 +381,9 @@ function snoozeMic() {
 
 function exSpeak(ex) {
   const it = ex.item;
+  // Free reply (ex.scene): a situation with several right answers; `it` is the model one. exam: no help, two tries.
+  const cands = ex.alts || [it], sc = ex.scene || null, exam = !!ex.exam;
+  let judged = 0;
   const box = h('div', { class: 'speak-box' });
   const status = h('div', { class: 'speak-status', role: 'status' });
   const diffBox = h('div');
@@ -393,13 +397,20 @@ function exSpeak(ex) {
     if (revealed) return;
     revealed = true;
     srsUpdate(it.id, false);
-    card.replaceChildren(wordCard(it), playBtns(it));
+    card.replaceChildren(wordCard(it), playBtns(it), altList(cands, it));
+    showNpc();
     play(it);
   };
+  // The local's line stays sound-only until the answer is out.
+  const npcBox = h('div');
+  const showNpc = () => { if (sc && sc.npc) npcBox.replaceChildren(bubble('npc', sc.npc)); };
+  if (sc && sc.npc) npcBox.replaceChildren(hiddenBubble(sc.npc));
+  const scene = sc ? h('div', { class: 'chat' }, h('div', { class: 'scene' }, `${sc.icon} ${sc.place}`), npcBox, h('div', { class: 'cue' }, '👉 ' + sc.cue)) : null;
   const hintCard = () => {
-    const steps = [S.settings.showThai ? ['คำอ่านไทย: ', h('b', {}, it.thai)] : null, ['pinyin: ', h('b', {}, pyEl(it.pinyin))]].filter(Boolean);
+    const steps = [sc ? ['พูดว่า: ', h('b', {}, it.meaning)] : null, S.settings.showThai ? ['คำอ่านไทย: ', h('b', {}, it.thai)] : null, ['pinyin: ', h('b', {}, pyEl(it.pinyin))]].filter(Boolean);
+    if (exam) return card.replaceChildren(h('p', { class: 'muted center' }, 'ไม่มีตัวช่วย · พูดได้ 2 ครั้ง'));
     card.replaceChildren(h('div', { class: 'word big recall' },
-      h('div', { class: 'word-mean' }, it.meaning),
+      sc ? null : h('div', { class: 'word-mean' }, it.meaning),
       ...steps.slice(0, hints).map(x => h('div', { class: 'recall-hint' }, ...x))),
       h('div', { class: 'play-row' },
         hints < steps.length ? h('button', { class: 'btn btn-ghost small', onclick: () => { hints++; hintCard(); } }, `💡 ใบ้ (${hints + 1}/${steps.length})`) : null,
@@ -408,21 +419,25 @@ function exSpeak(ex) {
   if (recall) hintCard(); else card.replaceChildren(wordCard(it), playBtns(it));
   const fromMemory = () => recall && !hints && !revealed;
 
-  const done = (kind, r) => {
+  const done = (kind, r, said = it) => {
     if (finished) return;
     finished = true;
     box.querySelectorAll('button').forEach(b => { b.disabled = true; });
     if (kind === 'skip') { setFoot(footBtn('ต่อไป', advance, 'btn-ghost')); advance(); return; }
+    if (exam) { L.examN = (L.examN || 0) + 1; if (kind === 'auto') L.examPass = (L.examPass || 0) + 1; }
+    if (sc) { showNpc(); card.replaceChildren(altList(cands, said)); }
+    if (kind === 'fail') { save(); sfx('bad'); return feedback(false, it, { title: 'ข้อนี้ยังไม่ผ่าน — คำตอบคือ' }); }
     if (kind === 'auto') { S.stats.speakAuto++; S.stats.speakAutoPass++; if (!recall || fromMemory()) srsUpdate(it.id, true); L.xp += 3; addXp(3); }
     else { S.stats.speakSelf++; L.xp += 2; addXp(2); }
     if (fromMemory()) { L.xp += 2; addXp(2); L.recalled = (L.recalled || 0) + 1; }
     save();
     sfx('ok');
-    feedback(true, it, { title: fromMemory() ? 'จำได้! พูดจากความจำ 🧠🎉' : kind === 'auto' ? (r.best >= 0.8 ? 'ชัดมาก! 🎉' : 'ใกล้แล้ว! ระบบฟังออก') : 'เยี่ยม! ฝึกพูดต่อไปนะ' });
+    feedback(true, said, { title: exam ? 'ผ่านข้อนี้ ✓' : fromMemory() ? (sc ? 'พูดเองได้! 🗣️🎉' : 'จำได้! พูดจากความจำ 🧠🎉') : kind === 'auto' ? (r.best >= 0.8 ? 'ชัดมาก! 🎉' : 'ใกล้แล้ว! ระบบฟังออก') : 'เยี่ยม! ฝึกพูดต่อไปนะ' });
   };
   const offerSelf = () => box.append(h('div', { class: 'self-row' },
     h('button', { class: 'btn btn-jade', onclick: () => done('self') }, '✓ ฉันพูดได้แล้ว (ตรวจเอง)')));
   const onMiss = () => {
+    if (exam) { if (judged >= 2) done('fail'); return; }
     if (recall && !revealed && attempts >= 3) { reveal(); status.append(h('br'), 'เฉลยให้แล้ว — ฟังแล้วพูดตาม'); }
     else if (attempts === (recall ? 6 : 3)) offerSelf();
   };
@@ -437,25 +452,30 @@ function exSpeak(ex) {
       const t0 = Date.now();
       try {
         const alts = await Speech.recognize({
-          timeoutMs: Math.max(6000, normZh(it.hanzi).length * 700),
-          isGood: a => heardWhole(it, a),
+          timeoutMs: Math.max(6000, ...cands.map(c => normZh(c.hanzi).length * 700)),
+          isGood: a => cands.some(c => heardWhole(c, a)),
           onStart: () => { status.textContent = 'พูดได้เลย 🎙️'; },
         });
         mic.classList.remove('on');
         mic.querySelector('.mic-l').textContent = 'แตะแล้วพูด';
-        const { r, dv, dd, toneErr, pass } = judgeSpeech(it, alts, recall);
+        // Free reply: the first answer that passes, else the closest one (its diff is the most useful).
+        const tries = cands.map(c => ({ c, ...judgeSpeech(c, alts, recall) }));
+        const hit = tries.find(t => t.pass) || tries.reduce((a, b) => (b.r.best > a.r.best ? b : a));
+        const { r, dv, dd, toneErr, pass } = hit;
         attempts++;
-        logI('sr', `${it.id} ได้ยิน [${alts.join(' / ')}] score=${r.best.toFixed(2)}${r.toneTrap ? ' trap=' + r.toneTrap : ''}${r.ctx ? ' ctx' : ''}` +
+        if (++judged === 1) markFirstTry(pass);
+        logI('sr', `${hit.c.id} ได้ยิน [${alts.join(' / ')}] score=${r.best.toFixed(2)}${r.toneTrap ? ' trap=' + r.toneTrap : ''}${r.ctx ? ' ctx' : ''}` +
           (dd ? ' diff=' + dd.syl.map(s => s.kind === 'ok' ? '✓' : s.kind + (s.heardPy ? ':' + s.heardPy : '')).join(',') : '') + ` ${Date.now() - t0}ms`);
         diffBox.replaceChildren(dv || '');
         if (dv) setTimeout(() => diffBox.scrollIntoView({ block: 'nearest', behavior: 'smooth' }), 50);
         if (pass) {
           if (r.ctx) status.replaceChildren('ผ่าน ✓ คนจีนน่าจะฟังออกจากบริบท — แต่ถ้าแก้จุดด้านล่างจะชัดขึ้น 👇');
           else if (dv) status.replaceChildren('ผ่าน แต่ยังมีจุดที่ควรแก้ 👇');
-          speakMark(it.id, true);
-          return done('auto', r);
+          if (C.items[it.id]) speakMark(it.id, true);
+          return done('auto', r, hit.c);
         }
-        speakMark(it.id, false); save();
+        if (C.items[it.id]) speakMark(it.id, false);
+        save();
         sfx('bad');
         const ch = carrierHint(it);
         if (ch) diffBox.prepend(ch);
@@ -521,10 +541,11 @@ function exSpeak(ex) {
   const lvl = Speech.level();
   lvl === 'A' ? renderA() : lvl === 'B' ? renderB() : renderC();
   if (recall && lvl === 'C') status.textContent = 'นึกแล้วพูดออกมา จากนั้นกด "ดูเฉลย" เพื่อเทียบ';
+  if (sc && sc.npc) setTimeout(() => play(sc.npc), 250);
   // must: the number drill only passes once you've said it (self-check still appears after 3 misses).
   setFoot(ex.must ? '' : footBtn('ข้ามข้อนี้', () => done('skip'), 'btn-ghost'));
   if (!recall) setTimeout(() => play(it), 250);
-  return h('div', { class: 'ex' }, prompt(recall ? '🧠 พูดเป็นภาษาจีนจากความจำ' : ex.follow ? 'ถูกแล้ว! ทีนี้พูดออกมา' : 'พูดตาม'), card, box, status, diffBox,
+  return h('div', { class: 'ex' }, prompt(sc ? (exam ? '🎓 สอบ: คุณจะพูดว่าอะไร?' : '🗣️ คุณจะพูดว่าอะไร?') : recall ? '🧠 พูดเป็นภาษาจีนจากความจำ' : ex.follow ? 'ถูกแล้ว! ทีนี้พูดออกมา' : 'พูดตาม'), scene, card, box, status, diffBox,
     ex.must ? null : h('button', { class: 'link', onclick: snoozeMic }, 'ตอนนี้พูดไม่ได้ (พัก 15 นาที)'));
 }
 
@@ -662,6 +683,9 @@ function finishSession() {
     extra.push('+1 ❤️ จากการฝึก');
     goalHit = addXp(5); sess.xp += 5;
   }
+  if (sess.mode === 'exam') extra.unshift(examResult(sess));
+  if (sess.mode === 'pattern' && sess.entry.patId !== 'all') S.patDone[sess.entry.patId] = (S.patDone[sess.entry.patId] || 0) + 1;
+  if (sess.mode === 'pattern' || sess.mode === 'scene') extra.unshift(`🗣️ พูดเองได้โดยไม่ใช้ตัวช่วย ${sess.recalled || 0}/${sess.queue.filter(q => q.recall).length} ประโยค`);
   if (sess.mode === 'recall') extra.unshift(`🧠 จำได้เองโดยไม่ใช้ตัวช่วย ${sess.recalled || 0}/${sess.queue.filter(q => q.recall).length} คำ`);
   if (goalHit) extra.push('ครบเป้าวันนี้! เติมหัวใจเต็ม ❤️×5');
   const streakUp = touchStreak();

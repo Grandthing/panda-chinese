@@ -91,6 +91,10 @@ function defaultState() {
     toneStats: {},
     speakMiss: {},
     speakMissSeeded: false,
+    firstTry: {},   // date → [spoken exercises, passed on the first try]
+    exams: [],      // situation exams: { d, pass, n }
+    patDone: {},    // sentence pattern id → times finished
+    soundStats: {}, // look-alike sound set id → [heard, right]
     stats: { speakAuto: 0, speakAutoPass: 0, speakSelf: 0 },
     lastExportDate: null,
   };
@@ -128,7 +132,7 @@ addEventListener('pagehide', () => { saveNow(); Log.flush(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) { saveNow(); Log.flush(); } });
 
 // ============================================================ Debug log (ring buffer, kept across sessions → LINE / file)
-const APP_VERSION = '1.18.0';
+const APP_VERSION = '2.0.0';
 const LOG_KEY = 'pandaTalk.log';
 const LOG_MAX = 400;
 const safeJson = v => { try { return JSON.stringify(v); } catch { return String(v); } };
@@ -167,7 +171,7 @@ for (const [k, l] of [['error', 'E'], ['warn', 'W']]) {
 }
 
 // ============================================================ Content
-const C = { items: {}, cats: {}, units: [], order: [], byId: {}, toneSets: [], itemUnit: {}, version: '' };
+const C = { items: {}, cats: {}, units: [], order: [], byId: {}, toneSets: [], itemUnit: {}, version: '', pat: { patterns: [], scenes: [], replies: [], sounds: [] } };
 
 async function loadContent() {
   const res = await fetch('content/units.json');
@@ -187,6 +191,11 @@ async function loadContent() {
   C.sentSets.forEach(st => st.sentences.forEach((x, k) => { x.id = `s_${st.id}_${k}`; x.set = st; }));
   // Meaning of each word inside a phrase (tools/make_glossary.py). Optional.
   C.gloss = await fetch('content/glossary.json').then(r => r.ok ? r.json() : null).catch(() => null);
+  // Sentence patterns, free-reply scenes, local replies, look-alike sounds (tools/make_patterns.py). Optional.
+  C.pat = await fetch('content/patterns.json').then(r => r.ok ? r.json() : null).catch(() => null) || { patterns: [], scenes: [], replies: [], sounds: [] };
+  C.pat.patterns.forEach(p => p.sentences.forEach((x, k) => { x.id = `p_${p.id}_${k}`; x.set = p; }));
+  C.pat.scenes.forEach(sc => sc.answers.forEach((a, k) => { a.id = `sc_${sc.id}_${k}`; }));
+  C.pat.replies.forEach(st => { const set = { icon: st.icon, title: `คุณ${st.title} · เขาตอบว่าอะไร?` }; st.lines.forEach((x, k) => { x.id = `r_${st.id}_${k}`; x.set = set; }); });
   C.order = []; C.byId = {}; C.itemUnit = {};
   for (const u of C.units) {
     u.items = uniq(u.lessons.flatMap(l => l.newItems || []));
