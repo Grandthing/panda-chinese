@@ -1,0 +1,12 @@
+{
+  "name": "panda-chinese",
+  "private": true,
+  "description": "พูดจีนรอดใน 20 วัน — tests only; the app itself has no build step",
+  "scripts": {
+    "test": "node tests/run.mjs",
+    "test:update": "node tests/run.mjs --update"
+  },
+  "devDependencies": {
+    "jsdom": "^25.0.1"
+  }
+}

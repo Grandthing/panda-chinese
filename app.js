@@ -2354,6 +2354,7 @@ const prompt = text => h('h2', { class: 'prompt' }, text);
 function choiceList(options, render, onPick) {
   const wrap = h('div', { class: 'options' });
   let sel = null;
+  if (L) L.opts = options; // with L.isOk: lets tests/run.mjs find the right answer the same way the exercise does
   options.forEach(o => {
     const b = h('button', { class: 'opt', onclick: () => { sel = o; wrap.querySelectorAll('.opt').forEach(x => x.classList.remove('sel')); b.classList.add('sel'); sfx('tap'); onPick(o, b); } }, render(o));
     wrap.append(b);
@@ -2361,6 +2362,7 @@ function choiceList(options, render, onPick) {
   return { wrap, get: () => sel };
 }
 function checkFlow(getSel, isOk, info, srsIds) {
+  L.isOk = isOk;
   const btn = footBtn('ตรวจคำตอบ', () => {
     const ex = L.queue[L.i];
     const ok = isOk(getSel());
@@ -2591,6 +2593,18 @@ function exDialog(ex) {
     h('p', { class: 'muted small' }, 'แตะตัวเลือกเพื่อฟังเสียง · ติดได้กด 💡'), list.wrap, h('div', { class: 'play-row' }, hintBtn));
 }
 
+// The whole verdict for one spoken attempt (kept apart from the screen so tests/run.mjs can replay real attempts).
+function judgeSpeech(it, alts, recall) {
+  const r = scoreSpeech(it, alts);
+  const dv = r.best < 1 ? diffView(it, r.heard) : null;
+  const dd = speechDiff(it, r.heard);
+  // A wrong tone changes the word for a native listener, so it never passes as "close enough".
+  const toneErr = !!dv && dd.syl.some(s => s.kind === 'tone');
+  // A long sentence must be mostly right; a short word passes once it's recognisable.
+  const pass = (r.best >= (recall ? 0.8 : normZh(it.hanzi).length >= 6 ? 0.75 : 0.5) && !toneErr) || r.ctx;
+  return { r, dv, dd, toneErr, pass };
+}
+
 function micButton(label, onclick) {
   return h('button', { class: 'mic', onclick, 'aria-label': label }, h('span', { class: 'mic-ic' }, '🎙️'), h('span', { class: 'mic-l' }, label));
 }
@@ -2668,18 +2682,13 @@ function exSpeak(ex) {
         });
         mic.classList.remove('on');
         mic.querySelector('.mic-l').textContent = 'แตะแล้วพูด';
-        const r = scoreSpeech(it, alts);
+        const { r, dv, dd, toneErr, pass } = judgeSpeech(it, alts, recall);
         attempts++;
-        const dv = r.best < 1 ? diffView(it, r.heard) : null;
-        const dd = speechDiff(it, r.heard);
         logI('sr', `${it.id} ได้ยิน [${alts.join(' / ')}] score=${r.best.toFixed(2)}${r.toneTrap ? ' trap=' + r.toneTrap : ''}${r.ctx ? ' ctx' : ''}` +
           (dd ? ' diff=' + dd.syl.map(s => s.kind === 'ok' ? '✓' : s.kind + (s.heardPy ? ':' + s.heardPy : '')).join(',') : '') + ` ${Date.now() - t0}ms`);
         diffBox.replaceChildren(dv || '');
         if (dv) setTimeout(() => diffBox.scrollIntoView({ block: 'nearest', behavior: 'smooth' }), 50);
-        // A wrong tone changes the word for a native listener, so it never passes as "close enough".
-        const toneErr = !!dv && dd.syl.some(s => s.kind === 'tone');
-        // A long sentence must be mostly right; a short word passes once it's recognisable.
-        if ((r.best >= (recall ? 0.8 : normZh(it.hanzi).length >= 6 ? 0.75 : 0.5) && !toneErr) || r.ctx) {
+        if (pass) {
           if (r.ctx) status.replaceChildren('ผ่าน ✓ คนจีนน่าจะฟังออกจากบริบท — แต่ถ้าแก้จุดด้านล่างจะชัดขึ้น 👇');
           else if (dv) status.replaceChildren('ผ่าน แต่ยังมีจุดที่ควรแก้ 👇');
           speakMark(it.id, true);
