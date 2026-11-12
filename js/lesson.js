@@ -459,6 +459,7 @@ function exSpeak(ex) {
         });
         mic.classList.remove('on');
         mic.querySelector('.mic-l').textContent = 'แตะแล้วพูด';
+        if (finished || !L || L.queue[L.i] !== ex) return; // skipped, or the lesson closed, while listening
         // Free reply: the first answer that passes, else the closest one (its diff is the most useful).
         const tries = cands.map(c => ({ c, ...judgeSpeech(c, alts, recall, ex.lenient) }));
         const hit = tries.find(t => t.pass) || tries.reduce((a, b) => (b.r.best > a.r.best ? b : a));
@@ -493,6 +494,7 @@ function exSpeak(ex) {
         mic.classList.remove('on');
         mic.querySelector('.mic-l').textContent = 'แตะแล้วพูด';
         logW('sr', `${it.id} error ${err} ${Date.now() - t0}ms`);
+        if (finished || !L || L.queue[L.i] !== ex) return;
         if (err === 'no-speech' || err === 'aborted') {
           attempts++;
           status.textContent = 'ไม่ได้ยินเสียง ลองพูดดังขึ้นอีกนิด';
@@ -592,6 +594,8 @@ function exToneSpeak(ex) {
   const status = h('div', { class: 'speak-status', role: 'status' });
   const res = h('div', { class: 'tone-res' });
   let lastClip = null, passed = false, ctl = null;
+  // Still the exercise on screen? A recording can end after the learner moved on or the lesson closed.
+  const alive = () => !!L && L.queue[L.i] === ex;
   const meter = h('div', { class: 'meter' }, h('i'));
 
   const showResult = r => {
@@ -619,7 +623,7 @@ function exToneSpeak(ex) {
     const weak = r.syl.filter(s => s.ok && s.weak);
     status.textContent = !r.ok ? 'ยังไม่ตรง ลองอีกครั้งได้' : weak.length
       ? `ผ่าน! แต่${weak.some(s => s.target === 4) ? 'เสียง 4 ให้ตกแรงกว่านี้ เหมือนพูด "ไม่!" แบบสั่ง' : 'เสียง 2 ให้ขึ้นสูงกว่านี้ เหมือนถาม "ห๊ะ?"'}` : 'วรรณยุกต์ถูกต้อง! 🎉';
-    if (r.ok && !passed) { passed = true; sfx('ok'); L.xp += 3; addXp(3); setFoot(footBtn('ต่อไป', advance, 'btn-jade')); }
+    if (r.ok && !passed) { passed = true; sfx('ok'); L.xp += 3; addXp(3); setFoot(footBtn('ต่อไป', () => { if (ctl) ctl.stop(); advance(); }, 'btn-jade')); }
   };
 
   const renderMic = () => {
@@ -639,6 +643,7 @@ function exToneSpeak(ex) {
         status.textContent = 'ไม่ได้รับสิทธิ์ใช้ไมค์ — ข้ามข้อนี้ได้';
         return;
       } finally { ctl = null; mic.classList.remove('on'); }
+      if (!alive()) return;
       if (cal) {
         if (calibrateFrom(clip)) { toast('ปรับเสียงแล้ว ✓'); renderMic(); }
         else status.textContent = 'ไม่ได้ยินเสียงชัด ลองพูด "อาาา" ดังขึ้นอีกนิด';
@@ -651,7 +656,7 @@ function exToneSpeak(ex) {
     box.replaceChildren(mic, meter);
   };
   renderMic();
-  setFoot(footBtn('ข้าม / ต่อไป', advance, 'btn-ghost'));
+  setFoot(footBtn('ข้าม / ต่อไป', () => { if (ctl) ctl.stop(); advance(); }, 'btn-ghost'));
   setTimeout(() => play(t), 250);
   return h('div', { class: 'ex' }, prompt('พูดให้ถูกวรรณยุกต์'), h('div', { class: 'tag' }, '🧪 ทดลอง · ไม่เสียหัวใจ'),
     h('div', { class: 'word big' }, h('div', { class: 'word-py' }, pyEl(t.pinyin)), toneShapes(t.tones),

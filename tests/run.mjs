@@ -220,6 +220,26 @@ async function testPlay() {
   for (const e of path0) await go(e.id, `startSession(${JSON.stringify(e.kind)}, C.byId[${JSON.stringify(e.id)}])`);
   for (const [mode, entry] of modes) await go(mode + (entry ? ':' + entry.id : ''), `startSession(${JSON.stringify(mode)}, ${JSON.stringify(entry || null)})`);
   check(problems.length === 0, `${played} ด่าน/โหมด เล่นจนจบได้` + (problems.length ? `\n      พัง ${problems.length}:\n` + problems.slice(0, 12).map(p => '      ' + p.split('\n').slice(0, 3).join('\n        ')).join('\n') : ''));
+  // A recording / recognition that ends after the learner moved on or the lesson closed must do nothing
+  // (v2.1.0: "ข้าม / ต่อไป" during the tone recording crashed in showResult once the lesson was over).
+  for (const [what, setup, type] of [
+    ['อัดวรรณยุกต์', `startRecording = () => ({ stop() {}, promise: new Promise(r => setTimeout(() => r({}), 40)) }); toneCheck = () => ({ ok: true, syl: [] }); S.pitchProfile = S.pitchProfile || { f0: 141 };
+      L.queue = [{ ...mkToneSpeakItem(C.items.jiuming), uid: 0 }];`, 'tone_speak'],
+    ['ตรวจคำพูด', `Speech.recognize = () => new Promise(r => setTimeout(() => r(['救命']), 40)); L.queue = [{ type: 'speak', item: C.items.jiuming, uid: 0 }];`, 'speak'],
+  ]) {
+    app.errors.length = 0;
+    app.run(`startSession('review'); ${setup} L.i = 0; renderExercise();`);
+    await tick();
+    app.w.document.querySelector('#l-body .mic').click();
+    await tick(5);
+    app.w.document.querySelector('#l-foot button.btn').click();          // ข้าม while the mic is on → finish screen
+    await tick(5);
+    const fin = app.w.document.querySelector('#l-foot button.btn');
+    if (fin) fin.click();                                                 // close the lesson
+    await tick(80);                                                       // the recording ends now
+    check(app.errors.length === 0 && !app.run('!!L'), `กดข้ามระหว่าง${what} แล้วปิดบท → ไม่มี error` + (app.errors.length ? ': ' + app.errors[0].split('\n')[0] : ''));
+  }
+  app.run('Speech.recognize = async () => window.__heard;');
   // Every top-level screen renders.
   for (const tab of ['learn', 'phrases', 'review', 'me', 'settings', 'help', 'guide', 'vocab']) {
     app.errors.length = 0;
